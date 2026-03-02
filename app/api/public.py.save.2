@@ -1,0 +1,289 @@
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from pydantic import BaseModel
+from typing import Optional
+import httpx
+import tempfile
+import os
+from app.core.config import settings
+
+router = APIRouter(prefix="/public", tags=["Public"])
+
+# Schemas
+class OnboardingData(BaseModel):
+    name: str
+    email: str
+    passcode: str
+    birth_date: str  # YYYY-MM-DD
+    birth_time: str  # HH:MM
+    birth_place: str
+    latitude: float
+    longitude: float
+    timezone_offset: float = 5.5
+
+class ChatRequest(BaseModel):
+
+    message: str
+    kundli_data: Optional[dict] = None
+    history: Optional[list] = []
+
+
+class KundliRequest(BaseModel):
+    name: str
+    date: dict  # {day, month, year}
+    time: dict  # {hour, minute}
+    place: dict  # {name, lat, lng}
+
+# Simple chat endpoint (no auth for testing)
+
+
+
+
+# Whisper transcription endpoint
+@router.post("/whisper/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Transcribe audio using OpenAI Whisper"""
+    try:
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        
+        # Send to OpenAI Whisper
+        async with httpx.AsyncClient() as client:
+            with open(tmp_path, "rb") as audio_file:
+                files = {"file": ("audio.m4a", audio_file, "audio/m4a")}
+                data = {"model": "whisper-1"}
+                
+                response = await client.post(
+                    "https://api.openai.com/v1/audio/transcriptions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}"
+                    },
+                    files=files,
+                    data=data,
+                    timeout=60.0
+                )
+        
+        # Clean up temp file
+        os.unlink(tmp_path)
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail="Transcription failed")
+        
+        result = response.json()
+        return {"text": result.get("text", ""), "transcript": result.get("text", "")}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Simple Kundli generation (no auth)
+@router.post("/kundli/generate")
+async def generate_kundli_public(request: KundliRequest):
+    """Generate Kundli without authentication"""
+    try:
+        from app.services.astrology import generate_kundli, format_kundli_for_ai
+        
+        kundli_data = generate_kundli(
+            name=request.name,
+            year=int(request.date.get("year", 2000)),
+            month=int(request.date.get("month", 1)),
+            day=int(request.date.get("day", 1)),
+            hour=int(request.time.get("hour", 12)),
+            minute=int(request.time.get("minute", 0)),
+            latitude=request.place.get("lat", 28.6139),
+            longitude=request.place.get("lng", 77.2090),
+            timezone=5.5,
+            gender="unknown"
+        )
+        
+        formatted = format_kundli_for_ai(kundli_data)
+        
+        return {
+            "success": True,
+            "kundli": kundli_data,
+            "formatted": formatted,
+            "sun_sign": kundli_data.get("sun_sign", ""),
+            "moon_sign": kundli_data.get("moon_sign", ""),
+            "ascendant": kundli_data.get("ascendant", ""),
+            "nakshatra": kundli_data.get("nakshatra", ""),
+            "current_dasha": kundli_data.get("current_dasha", {}).get("planet", "")
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+# Text-to-Speech endpoint
+@router.post("/tts")
+async def text_to_speech(request: dict):
+    """Convert text to speech using OpenAI TTS"""
+    try:
+        text = request.get("text", "")
+        if not text:
+            raise HTTPException(status_code=400, detail="No text provided")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/audio/speech",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "tts-1",
+                    "input": text,
+                    "voice": "nova",  # Options: alloy, echo, fable, onyx, nova, shimmer
+                    "response_format": "mp3"
+                },
+                timeout=60.0
+            )
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail="TTS failed")
+        
+        # Return base64 encoded audio
+        import base64
+        audio_base64 = base64.b64encode(response.content).decode('utf-8')
+        return {"audio": audio_base64, "format": "mp3"}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/daily-ritual")
+async def get_daily_ritual(request: dict):
+    """Generate personalized daily ritual based on transits and user's chart"""
+    try:
+        from app.services.realtime_astro import get_current_transits, NAKSHATRAS
+        from datetime import datetime
+
+        kundli_data = request.get("kundli_data", {})
+        user_name = request.get("name", "Seeker")
+
+        # Get current transits
+        transits = get_current_transits()
+        moon_nakshatra = transits['Moon']['nakshatra']
+        moon_rashi = transits['Moon']['rashi_english']
+
+        # Get user's ascendant (handle both string and dict formats)
+        ascendant = kundli_data.get('ascendant', {})
+        if isinstance(ascendant, dict):
+            asc_rashi_index = ascendant.get('rashi_index', 0)
+        elif isinstance(ascendant, str):
+            sign_to_index = {
+                'Aries': 0, 'Mesha': 0,
+                'Taurus': 1, 'Vrishabha': 1,
+                'Gemini': 2, 'Mithuna': 2,
+                'Cancer': 3, 'Karka': 3,
+                'Leo': 4, 'Simha': 4,
+                'Virgo': 5, 'Kanya': 5,
+                'Libra': 6, 'Tula': 6,
+                'Scorpio': 7, 'Vrischika': 7,
+                'Sagittarius': 8, 'Dhanu': 8,
+                'Capricorn': 9, 'Makara': 9,
+                'Aquarius': 10, 'Kumbha': 10,
+                'Pisces': 11, 'Meena': 11,
+            }
+            asc_rashi_index = sign_to_index.get(ascendant, 0)
+        else:
+            asc_rashi_index = 0
+
+        # Also try to get from raw data if available
+        if asc_rashi_index == 0 and 'raw' in kundli_data:
+            raw_asc = kundli_data.get('raw', {}).get('ascendant', {})
+            if isinstance(raw_asc, dict):
+                asc_rashi_index = raw_asc.get('rashi_index', 0)
+
+        # Calculate Moon's house from user's ascendant
+        moon_house = ((transits['Moon']['rashi_index'] - asc_rashi_index) % 12) + 1
+
+        # Determine today's energy based on Moon nakshatra
+        nakshatra_energies = {
+            'Ashwini': {'energy': 'ACTIVE', 'theme': 'New beginnings and quick action', 'avoid': 'Rushing important decisions'},
+            'Bharani': {'energy': 'TRANSFORMATIVE', 'theme': 'Letting go and rebirth', 'avoid': 'Holding onto the past'},
+            'Krittika': {'energy': 'PURIFYING', 'theme': 'Cutting through illusions', 'avoid': 'Being overly critical'},
+            'Rohini': {'energy': 'CREATIVE', 'theme': 'Beauty, comfort, and growth', 'avoid': 'Overindulgence'},
+            'Mrigashira': {'energy': 'CURIOUS', 'theme': 'Seeking and exploring', 'avoid': 'Restlessness'},
+            'Ardra': {'energy': 'INTENSE', 'theme': 'Emotional breakthroughs', 'avoid': 'Destructive outbursts'},
+            'Punarvasu': {'energy': 'RENEWING', 'theme': 'Return and restoration', 'avoid': 'Repeating old patterns'},
+            'Pushya': {'energy': 'NURTURING', 'theme': 'Care and nourishment', 'avoid': 'Neglecting self-care'},
+            'Ashlesha': {'energy': 'INTUITIVE', 'theme': 'Deep wisdom and insight', 'avoid': 'Manipulation'},
+            'Magha': {'energy': 'POWERFUL', 'theme': 'Authority and ancestors', 'avoid': 'Arrogance'},
+            'Purva Phalguni': {'energy': 'JOYFUL', 'theme': 'Pleasure and relaxation', 'avoid': 'Laziness'},
+            'Uttara Phalguni': {'energy': 'SUPPORTIVE', 'theme': 'Helping and healing', 'avoid': 'Overcommitting'},
+            'Hasta': {'energy': 'SKILLFUL', 'theme': 'Craftsmanship and detail', 'avoid': 'Perfectionism'},
+            'Chitra': {'energy': 'CREATIVE', 'theme': 'Beauty and architecture', 'avoid': 'Superficiality'},
+            'Swati': {'energy': 'FLEXIBLE', 'theme': 'Independence and movement', 'avoid': 'Indecision'},
+            'Vishakha': {'energy': 'DETERMINED', 'theme': 'Goals and ambition', 'avoid': 'Obsession'},
+            'Anuradha': {'energy': 'DEVOTED', 'theme': 'Friendship and loyalty', 'avoid': 'Jealousy'},
+            'Jyeshtha': {'energy': 'PROTECTIVE', 'theme': 'Leadership and courage', 'avoid': 'Control issues'},
+            'Mula': {'energy': 'TRANSFORMATIVE', 'theme': 'Uprooting and truth', 'avoid': 'Destruction'},
+            'Purva Ashadha': {'energy': 'INVINCIBLE', 'theme': 'Courage and declaration', 'avoid': 'Overconfidence'},
+            'Uttara Ashadha': {'energy': 'VICTORIOUS', 'theme': 'Final victory and ethics', 'avoid': 'Rigidity'},
+            'Shravana': {'energy': 'RECEPTIVE', 'theme': 'Listening and learning', 'avoid': 'Gossip'},
+            'Dhanishta': {'energy': 'PROSPEROUS', 'theme': 'Wealth and rhythm', 'avoid': 'Greed'},
+            'Shatabhisha': {'energy': 'HEALING', 'theme': 'Solitude and medicine', 'avoid': 'Isolation'},
+            'Purva Bhadrapada': {'energy': 'FIERY', 'theme': 'Transformation and passion', 'avoid': 'Aggression'},
+            'Uttara Bhadrapada': {'energy': 'DEEP', 'theme': 'Wisdom and depths', 'avoid': 'Withdrawal'},
+            'Revati': {'energy': 'COMPASSIONATE', 'theme': 'Completion and travel', 'avoid': 'Escapism'},
+        }
+
+        today_info = nakshatra_energies.get(moon_nakshatra, {
+            'energy': 'BALANCED',
+            'theme': 'Finding equilibrium',
+            'avoid': 'Extremes'
+        })
+
+        # Moon house meanings
+        house_meanings = {
+            1: 'Self-focus and new starts',
+            2: 'Finances and family',
+            3: 'Communication and courage',
+            4: 'Home and emotions',
+            5: 'Creativity and romance',
+            6: 'Health and daily work',
+            7: 'Relationships and partnerships',
+            8: 'Transformation and hidden matters',
+            9: 'Luck and higher learning',
+            10: 'Career and public life',
+            11: 'Gains and friendships',
+            12: 'Rest and spirituality',
+        }
+
+        # Best times based on Moon position
+        best_times = {
+            1: '6-8 AM', 2: '8-10 AM', 3: '10-12 PM', 4: '12-2 PM',
+            5: '2-4 PM', 6: '4-6 PM', 7: '6-8 PM', 8: '8-10 PM',
+            9: '10-12 AM', 10: '12-2 AM', 11: '2-4 AM', 12: '4-6 AM',
+        }
+
+        # Daily words based on energy
+        energy_words = {
+            'ACTIVE': 'ACTION', 'TRANSFORMATIVE': 'RELEASE', 'PURIFYING': 'CLARITY',
+            'CREATIVE': 'CREATE', 'CURIOUS': 'EXPLORE', 'INTENSE': 'FEEL',
+            'RENEWING': 'RESTORE', 'NURTURING': 'CARE', 'INTUITIVE': 'TRUST',
+            'POWERFUL': 'LEAD', 'JOYFUL': 'ENJOY', 'SUPPORTIVE': 'HELP',
+            'SKILLFUL': 'CRAFT', 'FLEXIBLE': 'ADAPT', 'DETERMINED': 'FOCUS',
+            'DEVOTED': 'CONNECT', 'PROTECTIVE': 'GUARD', 'INVINCIBLE': 'COURAGE',
+            'VICTORIOUS': 'WIN', 'RECEPTIVE': 'LISTEN', 'PROSPEROUS': 'GROW',
+            'HEALING': 'HEAL', 'FIERY': 'TRANSFORM', 'DEEP': 'REFLECT',
+            'COMPASSIONATE': 'LOVE', 'BALANCED': 'PATIENCE',
+        }
+
+        today = datetime.now()
+
+        return {
+            "success": True,
+            "date": today.strftime("%B %d, %Y"),
+            "greeting": f"Good {'Morning' if today.hour < 12 else 'Afternoon' if today.hour < 17 else 'Evening'}, {user_name}",
+            "energy": today_info['energy'],
+            "theme": today_info['theme'],
+            "avoid": today_info['avoid'],
+            "moon_house": moon_house,
+            "moon_focus": house_meanings.get(moon_house, 'Balance'),
+            "best_time": best_times.get(moon_house, '2-4 PM'),
+            "word": energy_words.get(today_info['energy'], 'PATIENCE'),
+            "moon_nakshatra": moon_nakshatra,
+            "moon_sign": moon_rashi,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}

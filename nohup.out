@@ -1,0 +1,86 @@
+INFO:     Will watch for changes in these directories: ['/var/www/jyotish/backend']
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     Started reloader process [23742] using StatReload
+INFO:     Started server process [23744]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     91.108.104.168:46422 - "GET /health HTTP/1.1" 200 OK
+INFO:     91.108.104.168:42380 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     91.108.104.168:54680 - "POST /api/public/whisper/transcribe HTTP/1.1" 422 Unprocessable Entity
+INFO:     91.108.104.168:48738 - "POST /api/public/whisper/transcribe HTTP/1.1" 422 Unprocessable Entity
+INFO:     91.108.104.168:37624 - "POST /api/public/kundli/generate HTTP/1.1" 200 OK
+INFO:     27.58.65.159:56982 - "POST /api/public/kundli/generate HTTP/1.1" 200 OK
+INFO:     27.58.65.159:52492 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.65.159:52492 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.65.159:52499 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.65.159:52499 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.65.159:54708 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.65.159:54708 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     178.128.20.214:35978 - "HEAD /_next/static/chunks/main.js HTTP/1.1" 404 Not Found
+INFO:     178.128.20.214:35978 - "HEAD /_next/static/ HTTP/1.1" 404 Not Found
+INFO:     178.128.20.214:35978 - "HEAD /api/trpc HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:21542 - "GET / HTTP/1.0" 200 OK
+INFO:     216.180.246.43:30044 - "GET / HTTP/1.1" 200 OK
+INFO:     216.180.246.43:30044 - "GET /manage/account/login HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /admin/index.html HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /index.html HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /%2BCSCOE%2B/logon.html HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /cgi-bin/login.cgi HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /login.htm HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /login.html HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /login.jsp HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /login HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /doc/index.html HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /remote/login HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /admin/login.asp HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /web/ HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /webpages/login.html HTTP/1.1" 404 Not Found
+INFO:     216.180.246.43:30044 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     117.222.167.134:40610 - "GET /boaform/admin/formLogin?username=ec8&psd=ec8 HTTP/1.0" 404 Not Found
+INFO:     79.103.188.103:49718 - "GET http%3A//www.google.com/ HTTP/1.0" 404 Not Found
+INFO:     79.103.188.103:51063 - "GET http%3A//www.google.com/ HTTP/1.0" 404 Not Found
+INFO:     176.65.139.9:57500 - "GET /login HTTP/1.1" 404 Not Found
+INFO:     216.180.246.181:21993 - "GET / HTTP/1.0" 200 OK
+WARNING:  Invalid HTTP request received.
+INFO:     216.180.246.181:49362 - "GET / HTTP/1.1" 200 OK
+INFO:     216.180.246.181:49362 - "GET /manage/account/login HTTP/1.1" 404 Not Found
+INFO:     216.180.246.181:49362 - "GET /admin/index.html HTTP/1.1" 404 Not Found
+INFO:     216.180.246.181:49362 - "GET /index.html HTTP/1.1" 404 Not Found
+INFO:     222.154.157.26:54966 - "GET / HTTP/1.1" 200 OK
+INFO:     176.65.139.9:58098 - "GET /login HTTP/1.1" 404 Not Found
+INFO:     27.58.131.111:54987 - "POST /api/public/kundli/generate HTTP/1.1" 200 OK
+INFO:     27.58.131.111:51460 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.131.111:51460 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.131.111:64965 - "POST /api/public/kundli/generate HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49264 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49264 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49275 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     91.108.104.168:42906 - "POST /api/public/whisper/transcribe HTTP/1.1" 422 Unprocessable Entity
+INFO:     27.58.131.111:64132 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.131.111:64132 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49178 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49178 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49181 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49178 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.131.111:65519 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.131.111:65519 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49155 - "POST /api/public/whisper/transcribe HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49155 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     27.58.131.111:49162 - "POST /api/public/chat HTTP/1.1" 200 OK
+INFO:     198.235.24.47:61682 - "GET / HTTP/1.1" 200 OK
+INFO:     64.226.119.13:40728 - "GET / HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'app/api/public.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [23744]
+INFO:     Started server process [90683]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Will watch for changes in these directories: ['/var/www/jyotish/backend']
+ERROR:    [Errno 98] Address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [90683]
+INFO:     Stopping reloader process [23742]
