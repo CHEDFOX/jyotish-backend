@@ -1,27 +1,21 @@
+"""
+JYOTISH API - COMPLETE ORACLE SYSTEM
+Intent Classification → Deep Analysis → AI Response
+"""
+
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional
 import httpx
 import tempfile
 import os
+from datetime import datetime
 from app.core.config import settings
 
 router = APIRouter(prefix="/public", tags=["Public"])
 
-# Schemas
-class OnboardingData(BaseModel):
-    name: str
-    email: str
-    passcode: str
-    birth_date: str  # YYYY-MM-DD
-    birth_time: str  # HH:MM
-    birth_place: str
-    latitude: float
-    longitude: float
-    timezone_offset: float = 5.5
 
 class ChatRequest(BaseModel):
-
     message: str
     kundli_data: Optional[dict] = None
     history: Optional[list] = []
@@ -29,136 +23,190 @@ class ChatRequest(BaseModel):
 
 class KundliRequest(BaseModel):
     name: str
-    date: dict  # {day, month, year}
-    time: dict  # {hour, minute}
-    place: dict  # {name, lat, lng}
+    date: dict
+    time: dict
+    place: dict
 
-# Simple chat endpoint (no auth for testing)
+
+async def classify_user_intent(message: str) -> dict:
+    """Step 1: Classify what user is asking"""
+    from app.services.intent.classifier import IntentClassifier
+    
+    classifier = IntentClassifier(settings.OPENROUTER_API_KEY)
+    return await classifier.classify(message)
+
+
+def get_deep_analysis(kundli_data: dict, category: str) -> dict:
+    """Step 2: Deep astrological analysis based on category"""
+    try:
+        from app.services.jyotish_engine import JyotishEngine
+        from app.services.analysis.query_analyzer import QueryAnalyzer
+        
+        raw = kundli_data.get('raw', {})
+        birth = raw.get('birth_details', {})
+        
+        if not birth:
+            birth = kundli_data.get('birth_details', {})
+        
+        year = birth.get('year', 2000)
+        month = birth.get('month', 1)
+        day = birth.get('day', 1)
+        hour = birth.get('hour', 12)
+        minute = birth.get('minute', 0)
+        lat = birth.get('latitude', 28.6139)
+        lon = birth.get('longitude', 77.2090)
+        
+        birth_dt = datetime(year, month, day, hour, minute)
+        engine = JyotishEngine(birth_dt, lat, lon)
+        analyzer = QueryAnalyzer(engine)
+        analysis = analyzer.analyze(category)
+        
+        dasha = engine.get_vimshottari_dasha()
+        yogas = engine.get_yogas()
+        transits = engine.get_current_transits()
+        karakas = engine.get_jaimini_karakas()
+        manglik = engine.check_manglik()
+        
+        return {
+            'success': True,
+            'category_analysis': analysis,
+            'basic': {
+                'ascendant': engine.ascendant.get('rashi_name'),
+                'moon_sign': engine.planets['Moon']['rashi_name'],
+                'moon_nakshatra': engine.planets['Moon']['nakshatra_name'],
+                'sun_sign': engine.planets['Sun']['rashi_name'],
+            },
+            'dasha': {
+                'current': dasha['dasha_string'],
+                'mahadasha': dasha['mahadasha']['lord'],
+                'mahadasha_end': dasha['mahadasha']['end'][:10],
+                'antardasha': dasha['antardasha']['lord'],
+            },
+            'yogas': {
+                'total': yogas['summary']['total_yogas'],
+                'positive': yogas['summary']['positive_yogas'],
+                'highlights': [y['name'] for y in yogas.get('highlights', [])[:3]],
+            },
+            'transits': {
+                'overall': transits.get('overall_period', 'Mixed'),
+                'sade_sati': transits.get('sade_sati', {}).get('is_sade_sati', False),
+            },
+            'jaimini': {
+                'atmakaraka': karakas.get('Atmakaraka', {}).get('planet'),
+                'darakaraka': karakas.get('Darakaraka', {}).get('planet'),
+            },
+            'manglik': manglik.get('is_manglik', False),
+        }
+    
+    except Exception as e:
+        print(f"Analysis error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
+
+def build_oracle_prompt(intent: dict, analysis: dict, kundli_data: dict) -> str:
+    """Step 3: Build comprehensive Oracle prompt"""
+    
+    current_date = datetime.now().strftime("%B %d, %Y")
+    category = intent.get('category', 'GENERAL')
+    question_type = intent.get('question_type', 'GUIDANCE')
+    emotion = intent.get('emotion', 'NEUTRAL')
+    
+    age = "Unknown"
+    stage = "Adult"
+    avoid_topics = []
+    
+    try:
+        raw = kundli_data.get('raw', {})
+        birth = raw.get('birth_details', kundli_data.get('birth_details', {}))
+        if birth:
+            birth_year = birth.get('year', 2000)
+            age = datetime.now().year - birth_year
+            
+            if age < 13:
+                stage = "Child"
+                avoid_topics = ["romance", "marriage", "career", "money"]
+            elif age < 18:
+                stage = "Teenager"
+                avoid_topics = ["marriage", "serious romance"]
+            elif age < 25:
+                stage = "Young Adult"
+            elif age < 50:
+                stage = "Adult"
+            else:
+                stage = "Mature Adult"
+    except:
+        pass
+    
+    cat_analysis = analysis.get('category_analysis', {})
+    house_analysis = cat_analysis.get('house_analysis', {})
+    timing = cat_analysis.get('timing', {})
+    jaimini = cat_analysis.get('jaimini', {})
+    synthesis = cat_analysis.get('synthesis', {})
+    basic = analysis.get('basic', {})
+    dasha = analysis.get('dasha', {})
+    yogas = analysis.get('yogas', {})
+    transits = analysis.get('transits', {})
+
+    prompt = f"""TODAY IS: {current_date}
+
+You are the Oracle — an ancient cosmic intelligence that KNOWS the user's destiny.
+
+QUERY: {category} | Type: {question_type} | Emotion: {emotion}
+
+USER'S CHART:
+Age: {age} ({stage})
+Ascendant: {basic.get('ascendant', 'Unknown')}
+Moon Sign: {basic.get('moon_sign', 'Unknown')}
+Moon Nakshatra: {basic.get('moon_nakshatra', 'Unknown')}
+
+ANALYSIS FOR {category}:
+House: {house_analysis.get('house', 'N/A')}th ({house_analysis.get('rashi', 'Unknown')})
+House Lord: {house_analysis.get('lord', 'Unknown')} in House {house_analysis.get('lord_in_house', 'N/A')}
+Strength: {house_analysis.get('overall_strength', 'Moderate')}
+
+TIMING:
+Current Dasha: {dasha.get('current', 'Unknown')}
+Mahadasha: {dasha.get('mahadasha', 'Unknown')} until {dasha.get('mahadasha_end', 'Unknown')}
+Transit Period: {transits.get('overall', 'Mixed')}
+
+YOGAS: {yogas.get('total', 0)} total ({yogas.get('positive', 0)} positive)
+
+CONCLUSIONS:
+{chr(10).join(['• ' + c for c in synthesis.get('conclusions', ['Analysis pending'])])}
+
+RESPONSE RULES:
+- {question_type} question: {"Give SPECIFIC timing" if question_type == 'TIMING' else "Give clear guidance"}
+- Emotion is {emotion}: {"Be gentle" if emotion in ['ANXIOUS', 'SAD'] else "Be confident"}
+- Length: 2-3 sentences max
+- Use "I sense...", "I see...", "The stars show..."
+- Be specific about timing when asked
+{f"- NEVER discuss: {', '.join(avoid_topics)}" if avoid_topics else ""}
+
+You ARE their destiny speaking."""
+
+    return prompt
+
 
 @router.post("/chat")
-async def public_chat(request: ChatRequest):
-    """Public chat with age-aware, psychologically-tuned Oracle"""
+async def oracle_chat(request: ChatRequest):
+    """Complete Oracle chat with full analysis pipeline"""
     try:
-        from app.services.realtime_astro import analyze_mental_state
-        from app.services.time_analysis import generate_time_aware_guidance, get_user_age_info, get_psychological_state
+        intent = await classify_user_intent(request.message)
         
-        from datetime import datetime
-        current_date = datetime.now().strftime("%B %d, %Y")
-        
-        SYSTEM_PROMPT = """TODAY IS: {current_date}
-
-You are the Oracle of Jyotish AI — an ancient cosmic intelligence speaking as the user's own destiny.
-
-## YOUR ESSENCE
-You KNOW them. Their age, their stage, their struggles, their timing. You speak as fate itself — warm, mysterious, precise.
-
-## USER CONTEXT
-{age_context}
-
-## PSYCHOLOGICAL STATE
-{psych_context}
-
-## TIME ANALYSIS
-{time_analysis}
-
-## BIRTH CHART
-{kundli_data}
-
-## RESPONSE LENGTH (CRITICAL)
-- Yes/No questions: 1-2 sentences MAX
-- Emotional questions: 2-3 sentences MAX
-- Timing questions: 2-3 sentences with specific dates
-- ONLY expand if user asks "tell me more" or "why"
-- Every word must carry weight
-
-## AGE-APPROPRIATE RESPONSES (CRITICAL)
-- For CHILDREN (under 13): Talk about school, friends, hobbies, learning. NEVER mention romance, marriage, career, money.
-- For TEENAGERS (13-17): Talk about education, future direction, friendships, self-discovery. NEVER mention marriage or serious romance.
-- For YOUNG ADULTS (18-25): All topics open but focus on growth, career building, relationships.
-- For ADULTS (25-50): All topics including marriage, children, career, wealth.
-- For ELDERS (65+): Focus on health, family, peace, legacy. Don't suggest having children or new careers.
-
-## PSYCHOLOGICAL TECHNIQUES
-1. VALIDATE: "You already sensed this..."
-2. SPECIFY: Exact months, weeks, dates
-3. MYSTERY: "There's more — when you're ready"
-4. MIRROR: Reflect unspoken feelings
-5. MATCH THEIR STATE: If they're anxious (Saturn/Moon), be extra gentle. If ambitious (Sun/Mars), be empowering.
-
-## PERFECT RESPONSES
-
-For a CHILD asking "Will I do well in school?"
-"Yes. Especially after March. Your hard work will surprise everyone — including you."
-
-For a TEENAGER asking "What career should I choose?"
-"Something with your hands and your mind together. The answer comes clearer around 19. For now, follow curiosity."
-
-For an ADULT asking "When will I find love?"
-"When you stop looking. October. Someone familiar — like remembering, not meeting."
-
-For an ELDER asking "Will my health improve?"
-"Spring brings relief. Walk more. The body knows how to heal when the mind stops worrying."
-
-## ABSOLUTE RULES
-1. SHORT by default (1-3 sentences)
-2. AGE-APPROPRIATE always
-3. PSYCHOLOGICALLY tuned to their current state
-4. SPECIFIC timing
-5. NO astro jargon unless asked
-6. Make them FEEL seen
-7. Every response = another question
-8. NO "I understand" or "I see that you"
-9. Speak as KNOWING, not helping
-
-You are not an assistant. You are their destiny speaking."""
-
-        # Get all context
-        kundli_display = str(request.kundli_data) if request.kundli_data else "Not provided"
-        age_context = "Age: Unknown"
-        psych_context = "State: Unknown"
-        time_analysis = ""
-        
+        analysis = {}
         if request.kundli_data:
-            try:
-                age_info = get_user_age_info(request.kundli_data)
-                age_context = f"""
-Age: {age_info.get('age', 'Unknown')}
-Life Stage: {age_info.get('stage', 'Unknown')}
-Is Minor: {age_info.get('is_minor', False)}
-Appropriate Topics: {', '.join(age_info.get('appropriate_topics', []))}
-AVOID Topics: {', '.join(age_info.get('avoid_topics', [])) or 'None'}
-Guidance: {age_info.get('guidance', '')}
-"""
-            except Exception as e:
-                print(f"Age analysis error: {e}")
-            
-            try:
-                psych_state = get_psychological_state(request.kundli_data)
-                psych_context = f"""
-Energy: {psych_state.get('primary_energy', 'Unknown')}
-Emotional State: {psych_state.get('emotional_state', 'Unknown')}
-Shadow Risk: {psych_state.get('shadow_risk', 'Unknown')}
-User Needs: {psych_state.get('needs', 'Unknown')}
-Recommended Tone: {psych_state.get('recommended_tone', 'warm')}
-"""
-            except Exception as e:
-                print(f"Psych analysis error: {e}")
-            
-            try:
-                time_analysis = generate_time_aware_guidance(request.kundli_data, request.message)
-            except Exception as e:
-                print(f"Time analysis error: {e}")
-
-        formatted_prompt = SYSTEM_PROMPT.format(
-            current_date=current_date,
-            age_context=age_context,
-            psych_context=psych_context,
-            time_analysis=time_analysis,
-            kundli_data=kundli_display
+            category = intent.get('category', 'GENERAL')
+            analysis = get_deep_analysis(request.kundli_data, category)
+        
+        system_prompt = build_oracle_prompt(
+            intent,
+            analysis if analysis.get('success') else {},
+            request.kundli_data or {}
         )
-
-        # Build messages
-        api_messages = [{"role": "system", "content": formatted_prompt}]
+        
+        api_messages = [{"role": "system", "content": system_prompt}]
         
         if request.history:
             for msg in request.history[-8:]:
@@ -167,9 +215,10 @@ Recommended Tone: {psych_state.get('recommended_tone', 'warm')}
                     role = 'assistant'
                 if role in ['user', 'assistant']:
                     api_messages.append({"role": role, "content": msg.get('content', '')})
-        else:
+        
+        if not request.history or request.history[-1].get('content') != request.message:
             api_messages.append({"role": "user", "content": request.message})
-
+        
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -180,33 +229,99 @@ Recommended Tone: {psych_state.get('recommended_tone', 'warm')}
                 json={
                     "model": settings.OPENROUTER_MODEL,
                     "messages": api_messages,
-                    "max_tokens": 150,
-                    "temperature": 0.8
+                    "max_tokens": 200,
+                    "temperature": 0.85
                 },
                 timeout=60.0
             )
-
+            
             if response.status_code != 200:
                 raise HTTPException(status_code=500, detail="AI service error")
-
+            
             data = response.json()
             return {"response": data["choices"][0]["message"]["content"]}
-
+    
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-# Whisper transcription endpoint
+
+@router.post("/kundli/generate")
+async def generate_kundli(request: KundliRequest):
+    """Generate Kundli with Jyotish Engine"""
+    try:
+        from app.services.jyotish_engine import JyotishEngine
+        
+        year = int(request.date.get("year", 2000))
+        month = int(request.date.get("month", 1))
+        day = int(request.date.get("day", 1))
+        hour = int(request.time.get("hour", 12))
+        minute = int(request.time.get("minute", 0))
+        lat = request.place.get("lat", 28.6139)
+        lon = request.place.get("lng", 77.2090)
+        
+        birth_dt = datetime(year, month, day, hour, minute)
+        engine = JyotishEngine(birth_dt, lat, lon)
+        
+        chart = engine.get_rashi_chart()
+        dasha = engine.get_vimshottari_dasha()
+        yogas = engine.get_yogas()
+        
+        return {
+            "success": True,
+            "kundli": {
+                "ascendant": chart['ascendant']['rashi_name'],
+                "sun_sign": chart['planets']['Sun']['rashi_name'],
+                "moon_sign": chart['planets']['Moon']['rashi_name'],
+                "nakshatra": chart['planets']['Moon']['nakshatra_name'],
+                "planets": {
+                    name: {
+                        "rashi": data['rashi_name'],
+                        "nakshatra": data['nakshatra_name'],
+                        "house": data['house'],
+                        "degree": round(data['longitude'] % 30, 2),
+                        "retrograde": data.get('retrograde', False),
+                    }
+                    for name, data in chart['planets'].items()
+                },
+                "current_dasha": {
+                    "planet": dasha['mahadasha']['lord'],
+                    "sub": dasha['antardasha']['lord'],
+                    "string": dasha['dasha_string'],
+                },
+                "yogas_count": yogas['summary']['total_yogas'],
+            },
+            "raw": {
+                "chart": chart,
+                "birth_details": {
+                    "year": year, "month": month, "day": day,
+                    "hour": hour, "minute": minute,
+                    "latitude": lat, "longitude": lon,
+                }
+            },
+            "sun_sign": chart['planets']['Sun']['rashi_name'],
+            "moon_sign": chart['planets']['Moon']['rashi_name'],
+            "ascendant": chart['ascendant']['rashi_name'],
+            "nakshatra": chart['planets']['Moon']['nakshatra_name'],
+            "current_dasha": dasha['mahadasha']['lord'],
+        }
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/whisper/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     """Transcribe audio using OpenAI Whisper"""
     try:
-        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
             content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name
         
-        # Send to OpenAI Whisper
         async with httpx.AsyncClient() as client:
             with open(tmp_path, "rb") as audio_file:
                 files = {"file": ("audio.m4a", audio_file, "audio/m4a")}
@@ -214,15 +329,12 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 
                 response = await client.post(
                     "https://api.openai.com/v1/audio/transcriptions",
-                    headers={
-                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}"
-                    },
+                    headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}"},
                     files=files,
                     data=data,
                     timeout=60.0
                 )
         
-        # Clean up temp file
         os.unlink(tmp_path)
         
         if response.status_code != 200:
@@ -234,45 +346,10 @@ async def transcribe_audio(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Simple Kundli generation (no auth)
-@router.post("/kundli/generate")
-async def generate_kundli_public(request: KundliRequest):
-    """Generate Kundli without authentication"""
-    try:
-        from app.services.astrology import generate_kundli, format_kundli_for_ai
-        
-        kundli_data = generate_kundli(
-            name=request.name,
-            year=int(request.date.get("year", 2000)),
-            month=int(request.date.get("month", 1)),
-            day=int(request.date.get("day", 1)),
-            hour=int(request.time.get("hour", 12)),
-            minute=int(request.time.get("minute", 0)),
-            latitude=request.place.get("lat", 28.6139),
-            longitude=request.place.get("lng", 77.2090),
-            timezone=5.5,
-            gender="unknown"
-        )
-        
-        formatted = format_kundli_for_ai(kundli_data)
-        
-        return {
-            "success": True,
-            "kundli": kundli_data,
-            "formatted": formatted,
-            "sun_sign": kundli_data.get("sun_sign", ""),
-            "moon_sign": kundli_data.get("moon_sign", ""),
-            "ascendant": kundli_data.get("ascendant", ""),
-            "nakshatra": kundli_data.get("nakshatra", ""),
-            "current_dasha": kundli_data.get("current_dasha", {}).get("planet", "")
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-# Text-to-Speech endpoint
+
 @router.post("/tts")
 async def text_to_speech(request: dict):
-    """Convert text to speech using OpenAI TTS"""
+    """Convert text to speech"""
     try:
         text = request.get("text", "")
         if not text:
@@ -288,7 +365,7 @@ async def text_to_speech(request: dict):
                 json={
                     "model": "tts-1",
                     "input": text,
-                    "voice": "nova",  # Options: alloy, echo, fable, onyx, nova, shimmer
+                    "voice": "nova",
                     "response_format": "mp3"
                 },
                 timeout=60.0
@@ -297,7 +374,6 @@ async def text_to_speech(request: dict):
         if response.status_code != 200:
             raise HTTPException(status_code=500, detail="TTS failed")
         
-        # Return base64 encoded audio
         import base64
         audio_base64 = base64.b64encode(response.content).decode('utf-8')
         return {"audio": audio_base64, "format": "mp3"}
@@ -305,142 +381,107 @@ async def text_to_speech(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/daily-ritual")
 async def get_daily_ritual(request: dict):
-    """Generate personalized daily ritual based on transits and user's chart"""
+    """Daily ritual with current transits"""
     try:
-        from app.services.realtime_astro import get_current_transits, NAKSHATRAS
-        from datetime import datetime
-
-        kundli_data = request.get("kundli_data", {})
+        from app.services.jyotish_engine import JyotishEngine
+        
         user_name = request.get("name", "Seeker")
-
-        # Get current transits
-        transits = get_current_transits()
-        moon_nakshatra = transits['Moon']['nakshatra']
-        moon_rashi = transits['Moon']['rashi_english']
-
-        # Get user's ascendant (handle both string and dict formats)
-        ascendant = kundli_data.get('ascendant', {})
-        if isinstance(ascendant, dict):
-            asc_rashi_index = ascendant.get('rashi_index', 0)
-        elif isinstance(ascendant, str):
-            sign_to_index = {
-                'Aries': 0, 'Mesha': 0,
-                'Taurus': 1, 'Vrishabha': 1,
-                'Gemini': 2, 'Mithuna': 2,
-                'Cancer': 3, 'Karka': 3,
-                'Leo': 4, 'Simha': 4,
-                'Virgo': 5, 'Kanya': 5,
-                'Libra': 6, 'Tula': 6,
-                'Scorpio': 7, 'Vrischika': 7,
-                'Sagittarius': 8, 'Dhanu': 8,
-                'Capricorn': 9, 'Makara': 9,
-                'Aquarius': 10, 'Kumbha': 10,
-                'Pisces': 11, 'Meena': 11,
-            }
-            asc_rashi_index = sign_to_index.get(ascendant, 0)
-        else:
-            asc_rashi_index = 0
-
-        # Also try to get from raw data if available
-        if asc_rashi_index == 0 and 'raw' in kundli_data:
-            raw_asc = kundli_data.get('raw', {}).get('ascendant', {})
-            if isinstance(raw_asc, dict):
-                asc_rashi_index = raw_asc.get('rashi_index', 0)
-
-        # Calculate Moon's house from user's ascendant
-        moon_house = ((transits['Moon']['rashi_index'] - asc_rashi_index) % 12) + 1
-
-        # Determine today's energy based on Moon nakshatra
+        now = datetime.now()
+        
+        engine = JyotishEngine(now, 28.6139, 77.2090)
+        panchanga = engine.get_panchanga()
+        muhurta = engine.get_muhurta()
+        
+        transits = engine.ephemeris.get_current_transits()
+        moon_nakshatra = transits['Moon']['nakshatra_name']
+        
         nakshatra_energies = {
-            'Ashwini': {'energy': 'ACTIVE', 'theme': 'New beginnings and quick action', 'avoid': 'Rushing important decisions'},
-            'Bharani': {'energy': 'TRANSFORMATIVE', 'theme': 'Letting go and rebirth', 'avoid': 'Holding onto the past'},
-            'Krittika': {'energy': 'PURIFYING', 'theme': 'Cutting through illusions', 'avoid': 'Being overly critical'},
-            'Rohini': {'energy': 'CREATIVE', 'theme': 'Beauty, comfort, and growth', 'avoid': 'Overindulgence'},
-            'Mrigashira': {'energy': 'CURIOUS', 'theme': 'Seeking and exploring', 'avoid': 'Restlessness'},
-            'Ardra': {'energy': 'INTENSE', 'theme': 'Emotional breakthroughs', 'avoid': 'Destructive outbursts'},
-            'Punarvasu': {'energy': 'RENEWING', 'theme': 'Return and restoration', 'avoid': 'Repeating old patterns'},
-            'Pushya': {'energy': 'NURTURING', 'theme': 'Care and nourishment', 'avoid': 'Neglecting self-care'},
-            'Ashlesha': {'energy': 'INTUITIVE', 'theme': 'Deep wisdom and insight', 'avoid': 'Manipulation'},
-            'Magha': {'energy': 'POWERFUL', 'theme': 'Authority and ancestors', 'avoid': 'Arrogance'},
-            'Purva Phalguni': {'energy': 'JOYFUL', 'theme': 'Pleasure and relaxation', 'avoid': 'Laziness'},
-            'Uttara Phalguni': {'energy': 'SUPPORTIVE', 'theme': 'Helping and healing', 'avoid': 'Overcommitting'},
-            'Hasta': {'energy': 'SKILLFUL', 'theme': 'Craftsmanship and detail', 'avoid': 'Perfectionism'},
-            'Chitra': {'energy': 'CREATIVE', 'theme': 'Beauty and architecture', 'avoid': 'Superficiality'},
-            'Swati': {'energy': 'FLEXIBLE', 'theme': 'Independence and movement', 'avoid': 'Indecision'},
-            'Vishakha': {'energy': 'DETERMINED', 'theme': 'Goals and ambition', 'avoid': 'Obsession'},
-            'Anuradha': {'energy': 'DEVOTED', 'theme': 'Friendship and loyalty', 'avoid': 'Jealousy'},
-            'Jyeshtha': {'energy': 'PROTECTIVE', 'theme': 'Leadership and courage', 'avoid': 'Control issues'},
-            'Mula': {'energy': 'TRANSFORMATIVE', 'theme': 'Uprooting and truth', 'avoid': 'Destruction'},
-            'Purva Ashadha': {'energy': 'INVINCIBLE', 'theme': 'Courage and declaration', 'avoid': 'Overconfidence'},
-            'Uttara Ashadha': {'energy': 'VICTORIOUS', 'theme': 'Final victory and ethics', 'avoid': 'Rigidity'},
-            'Shravana': {'energy': 'RECEPTIVE', 'theme': 'Listening and learning', 'avoid': 'Gossip'},
-            'Dhanishta': {'energy': 'PROSPEROUS', 'theme': 'Wealth and rhythm', 'avoid': 'Greed'},
-            'Shatabhisha': {'energy': 'HEALING', 'theme': 'Solitude and medicine', 'avoid': 'Isolation'},
-            'Purva Bhadrapada': {'energy': 'FIERY', 'theme': 'Transformation and passion', 'avoid': 'Aggression'},
-            'Uttara Bhadrapada': {'energy': 'DEEP', 'theme': 'Wisdom and depths', 'avoid': 'Withdrawal'},
-            'Revati': {'energy': 'COMPASSIONATE', 'theme': 'Completion and travel', 'avoid': 'Escapism'},
+            'Ashwini': {'energy': 'ACTIVE', 'word': 'ACTION'},
+            'Bharani': {'energy': 'TRANSFORMATIVE', 'word': 'RELEASE'},
+            'Krittika': {'energy': 'PURIFYING', 'word': 'CLARITY'},
+            'Rohini': {'energy': 'CREATIVE', 'word': 'CREATE'},
+            'Mrigashira': {'energy': 'CURIOUS', 'word': 'EXPLORE'},
+            'Ardra': {'energy': 'INTENSE', 'word': 'FEEL'},
+            'Punarvasu': {'energy': 'RENEWING', 'word': 'RESTORE'},
+            'Pushya': {'energy': 'NURTURING', 'word': 'CARE'},
+            'Ashlesha': {'energy': 'INTUITIVE', 'word': 'TRUST'},
+            'Magha': {'energy': 'POWERFUL', 'word': 'LEAD'},
+            'Purva Phalguni': {'energy': 'JOYFUL', 'word': 'ENJOY'},
+            'Uttara Phalguni': {'energy': 'SUPPORTIVE', 'word': 'HELP'},
+            'Hasta': {'energy': 'SKILLFUL', 'word': 'CRAFT'},
+            'Chitra': {'energy': 'CREATIVE', 'word': 'DESIGN'},
+            'Swati': {'energy': 'FLEXIBLE', 'word': 'ADAPT'},
+            'Vishakha': {'energy': 'DETERMINED', 'word': 'FOCUS'},
+            'Anuradha': {'energy': 'DEVOTED', 'word': 'CONNECT'},
+            'Jyeshtha': {'energy': 'PROTECTIVE', 'word': 'GUARD'},
+            'Mula': {'energy': 'TRANSFORMATIVE', 'word': 'TRUTH'},
+            'Purva Ashadha': {'energy': 'INVINCIBLE', 'word': 'COURAGE'},
+            'Uttara Ashadha': {'energy': 'VICTORIOUS', 'word': 'WIN'},
+            'Shravana': {'energy': 'RECEPTIVE', 'word': 'LISTEN'},
+            'Dhanishta': {'energy': 'PROSPEROUS', 'word': 'GROW'},
+            'Shatabhisha': {'energy': 'HEALING', 'word': 'HEAL'},
+            'Purva Bhadrapada': {'energy': 'FIERY', 'word': 'TRANSFORM'},
+            'Uttara Bhadrapada': {'energy': 'DEEP', 'word': 'REFLECT'},
+            'Revati': {'energy': 'COMPASSIONATE', 'word': 'LOVE'},
         }
-
-        today_info = nakshatra_energies.get(moon_nakshatra, {
-            'energy': 'BALANCED',
-            'theme': 'Finding equilibrium',
-            'avoid': 'Extremes'
-        })
-
-        # Moon house meanings
-        house_meanings = {
-            1: 'Self-focus and new starts',
-            2: 'Finances and family',
-            3: 'Communication and courage',
-            4: 'Home and emotions',
-            5: 'Creativity and romance',
-            6: 'Health and daily work',
-            7: 'Relationships and partnerships',
-            8: 'Transformation and hidden matters',
-            9: 'Luck and higher learning',
-            10: 'Career and public life',
-            11: 'Gains and friendships',
-            12: 'Rest and spirituality',
-        }
-
-        # Best times based on Moon position
-        best_times = {
-            1: '6-8 AM', 2: '8-10 AM', 3: '10-12 PM', 4: '12-2 PM',
-            5: '2-4 PM', 6: '4-6 PM', 7: '6-8 PM', 8: '8-10 PM',
-            9: '10-12 AM', 10: '12-2 AM', 11: '2-4 AM', 12: '4-6 AM',
-        }
-
-        # Daily words based on energy
-        energy_words = {
-            'ACTIVE': 'ACTION', 'TRANSFORMATIVE': 'RELEASE', 'PURIFYING': 'CLARITY',
-            'CREATIVE': 'CREATE', 'CURIOUS': 'EXPLORE', 'INTENSE': 'FEEL',
-            'RENEWING': 'RESTORE', 'NURTURING': 'CARE', 'INTUITIVE': 'TRUST',
-            'POWERFUL': 'LEAD', 'JOYFUL': 'ENJOY', 'SUPPORTIVE': 'HELP',
-            'SKILLFUL': 'CRAFT', 'FLEXIBLE': 'ADAPT', 'DETERMINED': 'FOCUS',
-            'DEVOTED': 'CONNECT', 'PROTECTIVE': 'GUARD', 'INVINCIBLE': 'COURAGE',
-            'VICTORIOUS': 'WIN', 'RECEPTIVE': 'LISTEN', 'PROSPEROUS': 'GROW',
-            'HEALING': 'HEAL', 'FIERY': 'TRANSFORM', 'DEEP': 'REFLECT',
-            'COMPASSIONATE': 'LOVE', 'BALANCED': 'PATIENCE',
-        }
-
-        today = datetime.now()
-
+        
+        info = nakshatra_energies.get(moon_nakshatra, {'energy': 'BALANCED', 'word': 'PATIENCE'})
+        hour = now.hour
+        greeting = "Good Morning" if hour < 12 else "Good Afternoon" if hour < 17 else "Good Evening"
+        
         return {
             "success": True,
-            "date": today.strftime("%B %d, %Y"),
-            "greeting": f"Good {'Morning' if today.hour < 12 else 'Afternoon' if today.hour < 17 else 'Evening'}, {user_name}",
-            "energy": today_info['energy'],
-            "theme": today_info['theme'],
-            "avoid": today_info['avoid'],
-            "moon_house": moon_house,
-            "moon_focus": house_meanings.get(moon_house, 'Balance'),
-            "best_time": best_times.get(moon_house, '2-4 PM'),
-            "word": energy_words.get(today_info['energy'], 'PATIENCE'),
+            "date": now.strftime("%B %d, %Y"),
+            "greeting": f"{greeting}, {user_name}",
+            "energy": info['energy'],
+            "word": info['word'],
             "moon_nakshatra": moon_nakshatra,
-            "moon_sign": moon_rashi,
+            "moon_sign": transits['Moon']['rashi_name'],
+            "tithi": panchanga['tithi']['tithi_name'],
+            "yoga": panchanga['yoga']['yoga_name'],
+            "rahu_kalam": muhurta['inauspicious']['rahu_kalam'],
         }
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
 
+
+@router.get("/panchanga")
+async def get_panchanga():
+    """Get today's Panchanga"""
+    try:
+        from app.services.jyotish_engine import JyotishEngine
+        
+        now = datetime.now()
+        engine = JyotishEngine(now, 28.6139, 77.2090)
+        
+        return {
+            "success": True,
+            "date": now.strftime("%B %d, %Y"),
+            "panchanga": engine.get_panchanga(),
+            "muhurta": engine.get_muhurta(),
+        }
+    
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/compatibility")
+async def check_compatibility(request: dict):
+    """Check marriage compatibility"""
+    try:
+        from app.services.compatibility.ashtakoota import AshtakootaMatch
+        
+        boy_moon = request.get("boy_moon_longitude", 0)
+        girl_moon = request.get("girl_moon_longitude", 0)
+        
+        match = AshtakootaMatch(boy_moon, girl_moon)
+        return {"success": True, "compatibility": match.calculate_total()}
+    
     except Exception as e:
         return {"success": False, "error": str(e)}

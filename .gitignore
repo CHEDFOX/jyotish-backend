@@ -1,7 +1,20 @@
-__pycache__/
-*.py[cod]
-*$py.class
+# Environment
 .env
 venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Test files
+test_*.py
+
+# Logs
 *.log
+
+# OS
 .DS_Store
+Thumbs.db
