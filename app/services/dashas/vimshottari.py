@@ -215,6 +215,65 @@ class VimshottariDasha:
         
         return pratyantars
     
+    def calculate_sookshmadasha(self, mahadasha_lord: str, antardasha_lord: str,
+                                pratyantardasha_lord: str,
+                                prat_start: datetime, prat_days: float) -> List[Dict]:
+        """
+        Calculate Sookshmadasha (sub-sub-sub-periods) — BPHS same proportion formula.
+        Gives time windows of DAYS.
+        """
+        sookshmas = []
+        start_index = VIMSHOTTARI_ORDER.index(pratyantardasha_lord)
+        prat_years = prat_days / 365.25
+        current_date = prat_start
+
+        for i in range(9):
+            sookshma_lord = VIMSHOTTARI_ORDER[(start_index + i) % 9]
+            sookshma_years = (prat_years * VIMSHOTTARI_YEARS[sookshma_lord]) / VIMSHOTTARI_TOTAL
+            sookshma_days = sookshma_years * 365.25
+            end_date = current_date + timedelta(days=sookshma_days)
+
+            sookshmas.append({
+                'lord': sookshma_lord,
+                'start': current_date,
+                'end': end_date,
+                'days': round(sookshma_days, 2),
+                'hours': round(sookshma_days * 24, 1),
+            })
+            current_date = end_date
+
+        return sookshmas
+
+    def calculate_pranadasha(self, sookshma_lord: str,
+                              sookshma_start: datetime, sookshma_days: float) -> List[Dict]:
+        """
+        Calculate Pranadasha (sub-sub-sub-sub-periods) — BPHS same proportion formula.
+        Gives time windows of HOURS.
+        """
+        pranas = []
+        start_index = VIMSHOTTARI_ORDER.index(sookshma_lord)
+        sookshma_years = sookshma_days / 365.25
+        current_date = sookshma_start
+
+        for i in range(9):
+            prana_lord = VIMSHOTTARI_ORDER[(start_index + i) % 9]
+            prana_years = (sookshma_years * VIMSHOTTARI_YEARS[prana_lord]) / VIMSHOTTARI_TOTAL
+            prana_days = prana_years * 365.25
+            prana_hours = prana_days * 24
+            prana_minutes = prana_hours * 60
+            end_date = current_date + timedelta(days=prana_days)
+
+            pranas.append({
+                'lord': prana_lord,
+                'start': current_date,
+                'end': end_date,
+                'hours': round(prana_hours, 2),
+                'minutes': round(prana_minutes, 1),
+            })
+            current_date = end_date
+
+        return pranas
+
     def get_current_dasha(self, query_date: datetime = None) -> Dict:
         """
         Get current running dasha at given date
@@ -270,7 +329,7 @@ class VimshottariDasha:
         if not current_prat:
             current_prat = pratyantars[0]
         
-        return {
+        result = {
             'query_date': query_date.isoformat(),
             'mahadasha': {
                 'lord': current_maha['lord'],
@@ -293,7 +352,90 @@ class VimshottariDasha:
             },
             'dasha_string': f"{current_maha['lord']}-{current_antar['lord']}-{current_prat['lord']}",
         }
+
+        # Sookshma dasha — BPHS same proportion formula, level 4 (days)
+        try:
+            sookshmas = self.calculate_sookshmadasha(
+                current_maha['lord'], current_antar['lord'], current_prat['lord'],
+                current_prat['start'], current_prat['days'])
+            current_sookshma = sookshmas[0]
+            for s in sookshmas:
+                if s['start'] <= query_date < s['end']:
+                    current_sookshma = s
+                    break
+            result['sookshmadasha'] = {
+                'lord': current_sookshma['lord'],
+                'start': current_sookshma['start'].isoformat(),
+                'end': current_sookshma['end'].isoformat(),
+                'days': current_sookshma['days'],
+                'hours': current_sookshma['hours'],
+            }
+            pranas = self.calculate_pranadasha(
+                current_sookshma['lord'],
+                current_sookshma['start'], current_sookshma['days'])
+            current_prana = pranas[0]
+            for pr in pranas:
+                if pr['start'] <= query_date < pr['end']:
+                    current_prana = pr
+                    break
+            result['pranadasha'] = {
+                'lord': current_prana['lord'],
+                'start': current_prana['start'].isoformat(),
+                'end': current_prana['end'].isoformat(),
+                'hours': current_prana['hours'],
+                'minutes': current_prana['minutes'],
+            }
+            result['dasha_string'] = f"{result['mahadasha']['lord']}-{result['antardasha']['lord']}-{result['pratyantardasha']['lord']}-{current_sookshma['lord']}-{current_prana['lord']}"
+        except Exception:
+            pass
+
+        return result
+
     
+        # Sookshma dasha — BPHS same proportion formula, level 4 (days)
+        try:
+            sookshmas = self.calculate_sookshmadasha(
+                current_maha['lord'], current_antar['lord'], current_prat['lord'],
+                current_prat['start'], current_prat['days']
+            )
+            current_sookshma = sookshmas[0]
+            for s in sookshmas:
+                if s['start'] <= query_date < s['end']:
+                    current_sookshma = s
+                    break
+
+            result['sookshmadasha'] = {
+                'lord': current_sookshma['lord'],
+                'start': current_sookshma['start'].isoformat(),
+                'end': current_sookshma['end'].isoformat(),
+                'days': current_sookshma['days'],
+                'hours': current_sookshma['hours'],
+            }
+
+            # Prana dasha — BPHS same proportion formula, level 5 (hours)
+            pranas = self.calculate_pranadasha(
+                current_sookshma['lord'],
+                current_sookshma['start'], current_sookshma['days']
+            )
+            current_prana = pranas[0]
+            for pr in pranas:
+                if pr['start'] <= query_date < pr['end']:
+                    current_prana = pr
+                    break
+
+            result['pranadasha'] = {
+                'lord': current_prana['lord'],
+                'start': current_prana['start'].isoformat(),
+                'end': current_prana['end'].isoformat(),
+                'hours': current_prana['hours'],
+                'minutes': current_prana['minutes'],
+            }
+            result['dasha_string'] = f"{result['mahadasha']['lord']}-{result['antardasha']['lord']}-{result['pratyantardasha']['lord']}-{current_sookshma['lord']}-{current_prana['lord']}"
+        except Exception:
+            pass
+
+        return result
+
     def get_dasha_for_date(self, target_date: datetime) -> Dict:
         """Alias for get_current_dasha with specific date"""
         return self.get_current_dasha(target_date)

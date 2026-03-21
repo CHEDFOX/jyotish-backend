@@ -1,20 +1,15 @@
-# Environment
-.env
-venv/
 __pycache__/
 *.pyc
 *.pyo
-
-# IDE
-.vscode/
-.idea/
-
-# Test files
-test_*.py
-
-# Logs
+.env
+*.backup
+*.save
+*.save.*
 *.log
-
-# OS
+*.out
+nohup.out
 .DS_Store
-Thumbs.db
+node_modules/
+venv/
+*.swp
+*.swo
