@@ -181,78 +181,44 @@ def _is_asking_why(message: str) -> bool:
 # ═══════════════════════════════════════════════════════════════════
 
 def build_oracle_prompt(intent_data: Dict, data_packet: Dict, user_message: str) -> str:
-    """Build the Oracle prompt. DATA FIRST, rules after. Short."""
+    """Build Oracle prompt. Classifier tells us everything."""
     
     language = intent_data.get('language', 'english')
     translated = intent_data.get('translated', user_message)
     briefing = data_packet.get('oracle_briefing', '')
-    is_worried = intent_data.get('is_worried', False)
-    
-    msg_lower = user_message.lower()
-    
-    # Detect MODE from user's message
-    # MODE 1: REVEAL — user asks WHY or wants to see astrology behind the answer
-    reveal_words = ['why', 'reason', 'kyu', 'kyon', 'explain astrology', 'show chart', 
-                    'which planet', 'which house', 'what yoga', 'kundli', 'my chart']
-    wants_reveal = any(w in msg_lower for w in reveal_words)
-    
-    # MODE 2: EDUCATION — user wants to LEARN about astrology concepts
-    edu_words = ['what is', 'what are', 'meaning of', 'tell me about', 'explain', 'how does',
-                 'teach', 'learn', 'what does', 'kya hota hai', 'samjhao',
-                 'dasha', 'yoga', 'transit', 'nakshatra', 'rashi', 'graha', 'bhava',
-                 'ashtakavarga', 'shadbala', 'navamsa', 'mahadasha', 'antardasha']
-    wants_education = any(w in msg_lower for w in edu_words) and not wants_reveal
-    
-    # MODE 3: WISE COUNSEL — default for life questions
-    
-    if wants_reveal:
-        mode = """MODE: REVEAL ASTROLOGY
-The user wants to see the astrology behind your answer. NOW you can and SHOULD:
-- Name specific planets and their positions
-- Mention house numbers and what they mean
-- Reference specific BPHS rules from the data
-- Explain yogas and dashas by name
-- Cite sources like "BPHS 24.84 says..."
-BUT still explain everything in simple language. Like teaching a curious friend.
-Keep it 6-10 lines. Show the classical rules that fired."""
-    elif wants_education:
-        mode = """MODE: EDUCATION
-The user wants to learn about an astrology concept. Teach them:
-- Use simple everyday analogies. "Dasha is like seasons of life — each planet gets its turn to drive."
-- Give real examples from their chart when possible
-- Keep it 4-6 lines per concept
-- Make them feel smart, not overwhelmed
-- End with a hook connecting the concept to their life
-- If they ask about a specific term, define it simply then show how it appears in their chart"""
-    else:
-        mode = """MODE: WISE COUNSEL
-No astrology jargon. No planet names. No house numbers. No yoga names.
-Speak as a wise person who KNOWS but doesn't show calculations.
-Convert all chart data into natural human language.
-Example: Your partner likely comes from a different background -- NOT -- 7th lord in 12th house"""
+    oracle_instruction = intent_data.get('oracle_instruction', '')
+    max_words = intent_data.get('max_words', 80)
+    needs_chart = intent_data.get('needs_chart', True)
+    is_delivery = intent_data.get('is_delivery', False)
     
     # Language note
     lang_note = ''
     if language and language.lower() not in ('english', 'en'):
-        lang_note = f"User wrote in {language}: \"{translated}\". Respond in their language naturally. Use warm {language} terms where appropriate."
+        lang_note = f"Respond in {language}."
     
-    # Worried note
-    worried_note = ''
-    if is_worried:
-        worried_note = "⚠️ USER IS WORRIED/ANXIOUS. First line MUST acknowledge their feeling with empathy. Never start with predictions when someone is scared."
+    # Delivery mode — give the actual thing, no teasing
+    delivery_note = ''
+    if is_delivery:
+        delivery_note = "IMPORTANT: The user asked for something specific. GIVE the actual answer from the data. The data contains the real mantra text, real numbers, real gemstone name. Use THAT data. Do NOT invent. Do NOT add a hook line at the end. Just deliver clearly."
     
-    prompt = f"""{ORACLE_PERSONA}
+    if needs_chart:
+        prompt = f"""{ORACLE_PERSONA}
 
-═══ THIS USER'S CHART DATA ═══
+═══ CHART DATA ═══
 {briefing}
 
-═══ MODE ═══
-{mode}
-
-{worried_note}
+═══ INSTRUCTION ═══
+{oracle_instruction}
+{delivery_note}
 {lang_note}
+Maximum {max_words} words. End with one hook line starting with "I notice..." or "There is..." unless this is a delivery."""
+    else:
+        prompt = f"""{ORACLE_PERSONA}
 
-Respond now. Use the chart data above. Be specific. Hook at the end."""
+═══ INSTRUCTION ═══
+{oracle_instruction}
+{lang_note}
+Maximum {max_words} words."""
 
     return prompt
 

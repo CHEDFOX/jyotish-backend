@@ -225,7 +225,12 @@ class JyotishEngine:
         self._ensure_chart()
         moon_long = self._planets['Moon']['longitude']
         dasha = VimshottariDasha(moon_long, self.birth_dt)
-        return dasha.get_current_dasha()
+        # Use get_dasha_for_date(now) for consistent 5-level accuracy
+        from datetime import datetime as dt_now
+        result = dasha.get_dasha_for_date(dt_now.now())
+        current = dasha.get_current_dasha()
+        current['dasha_string'] = result.get('dasha_string', current.get('dasha_string', ''))
+        return current
     
     def get_vimshottari_periods(self, years: int = 120) -> List[Dict]:
         self._ensure_chart()

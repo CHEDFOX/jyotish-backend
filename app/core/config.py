@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     GOOGLE_PLACES_API_KEY: str
 
-    RATE_LIMIT_CHAT: int = 30
+    RATE_LIMIT_CHAT: int = 9999
     RATE_LIMIT_KUNDLI: int = 20
     RATE_LIMIT_WHISPER: int = 30
     RATE_LIMIT_TTS: int = 30

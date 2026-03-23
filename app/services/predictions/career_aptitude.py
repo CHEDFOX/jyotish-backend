@@ -106,7 +106,7 @@ class CareerAptitude:
 
             # Normalize to percentage
             max_possible = 15 * len(criteria['planets']) + 12 + 15 * 2 + 8 + 42  # +42 for politics extras
-            pct = min(100, int((score / max(max_possible, 1)) * 100))
+            pct = min(100, int(((score or 0) / max(max_possible, 1)) * 100))
 
             scores[field] = {
                 'score': pct,

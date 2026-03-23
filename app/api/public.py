@@ -116,7 +116,7 @@ def _extract_birth_data(kundli_data: dict) -> dict:
 
 @router.post("/chat")
 async def oracle_chat(request_body: ChatRequest, request: Request):
-    check_rate_limit(request, "chat", settings.RATE_LIMIT_CHAT)
+    # check_rate_limit(request, "chat", settings.RATE_LIMIT_CHAT)  # disabled for testing
 
     try:
         from app.services.oracle.pipeline import process_oracle_query

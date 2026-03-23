@@ -49,23 +49,13 @@ class DataAssembler:
 
         raw_data = {}
 
-        # ALWAYS fire classical_rules for life event topics — this is the PRIMARY system
-        life_events = {
-            'marriage': 'marriage', 'career': 'career', 'wealth': 'wealth',
-            'health': 'health_issue', 'children': 'childbirth', 'education': 'education',
-            'travel': 'foreign', 'property': 'property', 'spiritual': 'spiritual',
-            'business': 'business', 'love': 'love', 'longevity': 'longevity',
-            'legal': 'career', 'daily': None, 'overview': None,
-        }
-        
-        if primary in life_events and life_events[primary] is not None:
-            event = life_events[primary]
-            classical_method = f'get_classical_analysis:{event}'
-            if classical_method not in methods:
-                methods.insert(0, classical_method)
-            # Always include dasha
-            if 'get_vimshottari_dasha' not in methods:
-                methods.append('get_vimshottari_dasha')
+        # Classifier already tells us exactly what to calculate
+        # Just ensure dasha is always included for chart questions
+        needs_chart = intent.get('needs_chart', True)
+        if needs_chart and 'get_vimshottari_dasha' not in methods:
+            methods.append('get_vimshottari_dasha')
+
+        if needs_chart:
 
             # Wire in ALL BPHS modules we built
             # Dasha effects interpretation
@@ -77,8 +67,243 @@ class DataAssembler:
             except Exception:
                 pass
 
+            # TIME-SPECIFIC calculations
+            # Extract year and month from oracle_instruction or original message
+            oracle_inst = intent.get('oracle_instruction', '')
+            orig_msg = intent.get('original_message', '').lower()
+            combined_text = oracle_inst + ' ' + orig_msg
+            import re
+            
+            year_match = re.search(r'20[2-3][0-9]', combined_text)
+            
+            # Try to extract month
+            month_map = {
+                'january': 1, 'february': 2, 'march': 3, 'april': 4,
+                'may': 5, 'june': 6, 'july': 7, 'august': 8,
+                'september': 9, 'october': 10, 'november': 11, 'december': 12,
+                'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4,
+                'jun': 6, 'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+                'diwali': 10, 'holi': 3, 'navratri': 10,
+            }
+            target_month = 6  # default mid-year
+            for mname, mnum in month_map.items():
+                if mname in combined_text.lower():
+                    target_month = mnum
+                    break
+            
+            # Try to extract day
+            day_match = re.search(r'([1-9]|[12][0-9]|3[01])\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)', combined_text.lower())
+            target_day = 15  # default mid-month
+            if day_match:
+                target_day = int(day_match.group(1))
+            
+            # Also check "next month", "next week", "this weekend" etc
+            from datetime import datetime as dt_class, timedelta
+            if 'next month' in orig_msg:
+                future = dt_class.now() + timedelta(days=30)
+                year_match = True  # force trigger
+                target_year_val = future.year
+                target_month = future.month
+                target_day = 15
+            elif 'next week' in orig_msg or 'next monday' in orig_msg:
+                future = dt_class.now() + timedelta(days=7)
+                year_match = True
+                target_year_val = future.year
+                target_month = future.month
+                target_day = future.day
+            elif 'this weekend' in orig_msg:
+                days_until_sat = (5 - dt_class.now().weekday()) % 7
+                future = dt_class.now() + timedelta(days=max(days_until_sat, 1))
+                year_match = True
+                target_year_val = future.year
+                target_month = future.month
+                target_day = future.day
+            
+            if year_match:
+                if isinstance(year_match, bool):
+                    target_year = target_year_val
+                else:
+                    target_year = int(year_match.group())
+                
+                # For year queries — calculate dasha at MULTIPLE points
+                is_year_query = 'year' in orig_msg or str(target_year) in orig_msg
+                
+                if is_year_query and target_month == 6:  # Default month means full year query
+                    # Calculate dasha at 4 quarters
+                    try:
+                        quarters = []
+                        for qm in [1, 4, 7, 10]:
+                            qd = self.engine.get_dasha_for_date(dt_class(target_year, qm, 15))
+                            quarters.append(f"Q{(qm//3)+1}({['Jan','Apr','Jul','Oct'][[1,4,7,10].index(qm)]}): {qd.get('dasha_string', '')}")
+                        raw_data['year_dasha'] = {'dasha_string': ' | '.join(quarters)}
+                    except Exception:
+                        pass
+                    
+                    # Also run classical rules for key life areas
+                    for event in ['career', 'wealth', 'health', 'marriage']:
+                        try:
+                            cr = self.engine.get_classical_analysis(event)
+                            if cr and cr.get('rules_fired', 0) > 0:
+                                raw_data[f'year_{event}'] = cr
+                        except Exception:
+                            pass
+                else:
+                    # Specific date query — single dasha point
+                    try:
+                        target_date = dt_class(target_year, target_month, min(target_day, 28))
+                        year_dasha = self.engine.get_dasha_for_date(target_date)
+                        if year_dasha:
+                            raw_data['year_dasha'] = year_dasha
+                    except Exception:
+                        pass
+                
+                # Varshaphal (annual prediction)
+                try:
+                    varshaphal = self.engine.get_varshaphal(target_year)
+                    if varshaphal:
+                        raw_data['varshaphal'] = varshaphal
+                except Exception:
+                    pass
+            
+            # Future transits — always useful for timing
+            if 'transits' in str(intent.get('calculations', [])) or 'next' in intent.get('original_message', '').lower() or year_match:
+                try:
+                    future = self.engine.get_future_transits()
+                    if future:
+                        raw_data['future_transits'] = future
+                except Exception:
+                    pass
+
+            # DELIVERY DATA — when classifier requests specific calculations
+            calculations = intent.get('calculations', [])
+            
+            # Mantra delivery
+            if 'remedies' in calculations or primary in ('mantra', 'remedies'):
+                try:
+                    mantra_data = self.engine.get_dynamic_mantra()
+                    if mantra_data:
+                        raw_data['mantra'] = mantra_data
+                except Exception:
+                    pass
+                try:
+                    remedy_data = self.engine.get_remedies()
+                    if remedy_data:
+                        raw_data['full_remedies'] = remedy_data
+                except Exception:
+                    pass
+
+            # Numerology delivery — always fire both
+            if 'numerology' in calculations or primary in ('numerology',) or 'get_numerology' in str(methods) or 'get_lucky_numbers' in str(methods):
+                try:
+                    lucky = self.engine.get_lucky_numbers()
+                    if lucky:
+                        raw_data['lucky_numbers'] = lucky
+                except Exception:
+                    pass
+                try:
+                    num_data = self.engine.get_numerology()
+                    if num_data:
+                        raw_data['numerology'] = num_data
+                except Exception:
+                    pass
+
+            # DEFINITIVE YES/NO DATA — for specific factual questions
+            msg_lower = intent.get('original_message', '').lower()
+            
+            # Manglik check
+            if 'manglik' in msg_lower or 'mangal' in msg_lower:
+                mars_h = self.engine.planets.get('Mars', {}).get('house', 0)
+                is_manglik = mars_h in [1, 4, 7, 8, 12]
+                raw_data['manglik'] = {
+                    'is_manglik': is_manglik,
+                    'mars_house': mars_h,
+                    'text': f'Mars is in house {mars_h}. Manglik dosha is {"PRESENT" if is_manglik else "NOT present"}.'
+                }
+
+            # Sade Sati check
+            if 'sade sati' in msg_lower or 'sadesati' in msg_lower:
+                try:
+                    dash = self.engine.get_realtime_dashboard()
+                    raw_data['sade_sati'] = {
+                        'status': dash.get('sade_sati', 'Unknown'),
+                        'text': f'Sade Sati is {dash.get("sade_sati", "Unknown")}.'
+                    }
+                except Exception:
+                    pass
+
+            # Kaal Sarp check
+            if 'kaal sarp' in msg_lower or 'kalsarp' in msg_lower or 'kal sarp' in msg_lower:
+                rahu_h = self.engine.planets.get('Rahu', {}).get('house', 0)
+                ketu_h = self.engine.planets.get('Ketu', {}).get('house', 0)
+                all_h = [self.engine.planets[p].get('house', 0) for p in ['Sun', 'Moon', 'Mars', 'Mercury', 'Jupiter', 'Venus', 'Saturn']]
+                if rahu_h < ketu_h:
+                    has_ksp = all(rahu_h <= h <= ketu_h for h in all_h)
+                else:
+                    has_ksp = all(h >= rahu_h or h <= ketu_h for h in all_h)
+                raw_data['kaal_sarp'] = {
+                    'has_kaal_sarp': has_ksp,
+                    'rahu_house': rahu_h,
+                    'ketu_house': ketu_h,
+                    'text': f'Kaal Sarp Dosh is {"PRESENT" if has_ksp else "NOT present"}. Rahu in H{rahu_h}, Ketu in H{ketu_h}.'
+                }
+
+            # Color/daily query
+            if 'color' in msg_lower or 'colour' in msg_lower or 'wear today' in msg_lower:
+                try:
+                    cmf = self.engine.get_color_metal_food()
+                    raw_data['color_today'] = cmf
+                except Exception:
+                    pass
+
+            # Vastu/direction query
+            if 'vastu' in msg_lower or 'direction' in msg_lower or 'facing' in msg_lower:
+                try:
+                    vastu = self.engine.get_vastu()
+                    raw_data['vastu'] = vastu
+                except Exception:
+                    pass
+
+            # Best time / peak period queries
+            time_words = ['best time', 'great time', 'peak', 'best year', 'best period', 'when will things improve', 'when will my luck', 'kab achcha', 'sabse achcha']
+            if any(tw in msg_lower for tw in time_words):
+                try:
+                    timeline = self.engine.get_life_timeline()
+                    raw_data['life_timeline'] = timeline
+                except Exception:
+                    pass
+
+            # Current dasha explicit query
+            if 'current dasha' in msg_lower or 'my dasha' in msg_lower or 'mera dasha' in msg_lower:
+                try:
+                    dasha = self.engine.get_vimshottari_dasha()
+                    raw_data['explicit_dasha'] = {
+                        'dasha_string': dasha.get('dasha_string', ''),
+                        'mahadasha': dasha.get('mahadasha', {}),
+                        'antardasha': dasha.get('antardasha', {}),
+                    }
+                except Exception:
+                    pass
+
+            # Gemstone delivery
+            if primary in ('gemstone',):
+                try:
+                    remedy_data = self.engine.get_remedies()
+                    if remedy_data and 'gemstone_recommendations' in remedy_data:
+                        raw_data['gemstone'] = remedy_data['gemstone_recommendations']
+                except Exception:
+                    pass
+
+            # Chakra
+            if 'chakra' in calculations:
+                try:
+                    chakra = self.engine.get_chakra_analysis()
+                    if chakra:
+                        raw_data['chakra'] = chakra
+                except Exception:
+                    pass
+
             # Longevity — only for health/longevity questions
-            if event in ('health_issue', 'longevity', 'health'):
+            if primary in ('health_issue', 'longevity', 'health'):
                 try:
                     from ..predictions.longevity_calc import calculate_longevity
                     longevity = calculate_longevity(self.engine)
@@ -88,7 +313,7 @@ class DataAssembler:
                     pass
 
             # Special lagnas — for wealth questions
-            if event in ('wealth', 'career', 'business'):
+            if primary in ('wealth', 'career', 'business'):
                 try:
                     from ..predictions.special_lagnas import get_special_lagna_effects
                     special = get_special_lagna_effects(self.engine)
@@ -98,7 +323,7 @@ class DataAssembler:
                     pass
 
             # Daridra yogas — for wealth questions
-            if event in ('wealth', 'business', 'career'):
+            if primary in ('wealth', 'business', 'career'):
                 try:
                     from ..predictions.daridra_yogas import check_daridra_yogas
                     daridra = check_daridra_yogas(self.engine)
@@ -108,7 +333,7 @@ class DataAssembler:
                     pass
 
             # Upapada — for marriage/love questions
-            if event in ('marriage', 'love'):
+            if primary in ('marriage', 'love'):
                 try:
                     from ..predictions.upapada import calculate_upapada
                     upa = calculate_upapada(self.engine)
@@ -296,11 +521,20 @@ class DataAssembler:
             }
 
         if method_name == 'get_yogas':
-            summary = data.get('summary', {})
+            highlights = data.get('highlights', [])
+            if highlights:
+                pos = [y for y in highlights if not y.get('is_negative', False)]
+                neg = [y for y in highlights if y.get('is_negative', False)]
+                yoga_lines = []
+                for y in highlights:
+                    yoga_lines.append(f"{y.get('name','')}: {y.get('effects','')} ({'NEGATIVE' if y.get('is_negative') else 'POSITIVE'}, {y.get('strength','')})")
+                return {
+                    'source': 'Yogas',
+                    'data': f"Total: {len(highlights)}, Positive: {len(pos)}, Negative: {len(neg)}. " + '; '.join(yoga_lines),
+                }
             return {
                 'source': 'Yogas',
-                'data': f"Total: {summary.get('total_yogas')}, Positive: {summary.get('positive_yogas')}, "
-                        f"Negative: {summary.get('negative_yogas')}, Strong: {summary.get('strong_yogas')}",
+                'data': 'No significant yogas found.',
             }
 
         if method_name == 'get_remedies':
@@ -481,6 +715,172 @@ class DataAssembler:
                 s = str(summary)[:150]
                 return {'source': method_name, 'data': s}
 
+
+        # ── YEAR OVERVIEW HANDLERS ──
+        
+        if method_name.startswith('year_') and method_name != 'year_dasha':
+            area = method_name.replace('year_', '')
+            if isinstance(data, dict):
+                summary = data.get('summary', '')
+                supports = len(data.get('supports', []))
+                opposes = len(data.get('opposes', []))
+                top_supports = [r.get('text', '')[:60] for r in data.get('supports', [])[:2]]
+                top_opposes = [r.get('text', '')[:60] for r in data.get('opposes', [])[:2]]
+                lines = [f'{area.upper()}: {summary}']
+                if top_supports:
+                    lines.append('Supports: ' + '; '.join(top_supports))
+                if top_opposes:
+                    lines.append('Challenges: ' + '; '.join(top_opposes))
+                return {
+                    'source': f'Year {area.title()} Outlook',
+                    'data': '. '.join(lines),
+                }
+            return None
+
+        # ── TIME-SPECIFIC HANDLERS ──
+        
+        if method_name == 'year_dasha':
+            if isinstance(data, dict):
+                return {
+                    'source': 'Year Dasha',
+                    'data': f"Dasha for that period: {data.get('dasha_string', '')}",
+                }
+            return None
+
+        if method_name == 'varshaphal':
+            if isinstance(data, dict):
+                muntha = data.get('muntha', {})
+                year_lord = data.get('year_lord', '')
+                return {
+                    'source': 'Varshaphal (Annual)',
+                    'data': f"Year lord: {year_lord}. Muntha: {muntha}. Solar return: {data.get('solar_return', '')}",
+                }
+            return None
+
+        if method_name == 'future_transits':
+            if isinstance(data, dict):
+                transits = data.get('major_transits', {})
+                lines = []
+                for planet, moves in transits.items():
+                    if isinstance(moves, list):
+                        for m in moves[:2]:
+                            if isinstance(m, dict):
+                                lines.append(f"{planet}: {m.get('from_rashi','')} to {m.get('to_rashi','')} on {m.get('date','')}")
+                return {
+                    'source': 'Future Transits',
+                    'data': '. '.join(lines[:6]),
+                }
+            return None
+
+        if method_name == 'life_timeline':
+            if isinstance(data, dict):
+                best = data.get('best_year', {})
+                worst = data.get('most_challenging', {})
+                timeline = data.get('timeline', [])
+                lines = []
+                lines.append(f"BEST PERIOD: {best.get('year', '')} — {best.get('theme', '')}")
+                lines.append(f"MOST CHALLENGING: {worst.get('year', '')} — {worst.get('theme', '')}")
+                for yr in timeline[:5]:
+                    lines.append(f"{yr.get('year', '')}: {yr.get('primary_theme', '')}")
+                return {
+                    'source': 'Life Timeline',
+                    'data': '. '.join(lines),
+                }
+            return None
+
+        # ── DEFINITIVE DATA HANDLERS ──
+        
+        if method_name == 'manglik':
+            if isinstance(data, dict):
+                return {'source': 'Manglik Check', 'data': data.get('text', '')}
+            return None
+
+        if method_name == 'sade_sati':
+            if isinstance(data, dict):
+                return {'source': 'Sade Sati', 'data': data.get('text', '')}
+            return None
+
+        if method_name == 'kaal_sarp':
+            if isinstance(data, dict):
+                return {'source': 'Kaal Sarp', 'data': data.get('text', '')}
+            return None
+
+        if method_name == 'color_today':
+            if isinstance(data, dict):
+                return {
+                    'source': 'Color Today',
+                    'data': f"Wear: {data.get('wear_color', '')}. Metal: {data.get('wear_metal', '')}. Eat: {data.get('eat', '')}. Dasha boost: {data.get('dasha_boost_color', '')}. Gem of day: {data.get('gem_of_the_day', '')}."
+                }
+            return None
+
+        if method_name == 'vastu':
+            if isinstance(data, dict):
+                dirs = data.get('lucky_directions', {})
+                sleeping = data.get('sleeping', {})
+                return {
+                    'source': 'Vastu',
+                    'data': f"Primary lucky: {dirs.get('primary_lucky', '')}. Career direction: {dirs.get('career_direction', '')}. Wealth direction: {dirs.get('wealth_direction', '')}. Sleep head: {sleeping.get('head_direction', '')}. Avoid: {sleeping.get('avoid', '')}."
+                }
+            return None
+
+        if method_name == 'explicit_dasha':
+            if isinstance(data, dict):
+                maha = data.get('mahadasha', {})
+                antar = data.get('antardasha', {})
+                return {
+                    'source': 'Current Dasha',
+                    'data': f"Full dasha: {data.get('dasha_string', '')}. Mahadasha: {maha.get('lord', '')} (ends {maha.get('end_date', '')}). Antardasha: {antar.get('lord', '')} (ends {antar.get('end_date', '')})."
+                }
+            return None
+
+        # ── DELIVERY DATA HANDLERS ──
+        
+        if method_name == 'mantra':
+            if isinstance(data, dict):
+                return {
+                    'source': 'Mantra',
+                    'data': data,
+                }
+            return None
+
+        if method_name == 'lucky_numbers':
+            if isinstance(data, dict):
+                return {
+                    'source': 'Lucky Numbers',
+                    'data': data,
+                }
+            return None
+
+        if method_name == 'numerology':
+            if isinstance(data, dict):
+                return {
+                    'source': 'Numerology',
+                    'data': data,
+                }
+            return None
+
+        if method_name == 'full_remedies':
+            if isinstance(data, dict):
+                return {
+                    'source': 'Full Remedies',
+                    'data': data,
+                }
+            return None
+
+        if method_name == 'gemstone':
+            return {
+                'source': 'Gemstone',
+                'data': data,
+            }
+
+        if method_name == 'chakra':
+            if isinstance(data, dict):
+                return {
+                    'source': 'Chakra',
+                    'data': data,
+                }
+            return None
+
         return None
 
     def _build_briefing(self, intent, sections, intent_data):
@@ -495,9 +895,49 @@ class DataAssembler:
         longevity_info = ''
         personality_info = ''
 
+        # Extract delivery data directly from sections
+        delivery_data = {}
         for section in sections:
             source = section.get('source', '')
             data = section.get('data', '')
+            src_lower = source.lower()
+            
+            if 'mantra' in src_lower and 'dynamic' not in src_lower:
+                delivery_data['mantra'] = data
+            elif 'lucky' in src_lower:
+                delivery_data['lucky_numbers'] = data
+            elif 'full remedies' in src_lower or ('remedies' in src_lower and 'gemstone' not in src_lower):
+                delivery_data['remedies'] = data
+            elif 'numerology' in src_lower:
+                delivery_data['numerology'] = data
+            elif 'gemstone' in src_lower:
+                delivery_data['gemstone'] = data
+
+        # Time-specific data
+        year_dasha_info = ''
+        varshaphal_info = ''
+        transit_info = ''
+
+        definitive_data = {}
+        for section in sections:
+            source = section.get('source', '')
+            data = section.get('data', '')
+            
+            if 'Year Dasha' in source:
+                year_dasha_info = data if isinstance(data, str) else str(data)
+            elif 'Varshaphal' in source:
+                varshaphal_info = data if isinstance(data, str) else str(data)
+            elif 'Future Transit' in source:
+                transit_info = data if isinstance(data, str) else str(data)
+
+            # Catch-all for definitive/delivery sources not handled elsewhere
+            if source in ('Manglik Check', 'Sade Sati', 'Kaal Sarp', 'Color Today', 'Vastu', 'Current Dasha'):
+                if isinstance(data, str) and data:
+                    definitive_data[source] = data
+
+            # Yoga data
+            if source == 'Yogas' and isinstance(data, str) and 'Total' in data:
+                definitive_data['yogas'] = data
 
             if 'Classical Rules' in source:
                 for line in data.split(chr(10)):
@@ -535,6 +975,76 @@ class DataAssembler:
             verdict = 'Balanced — ' + str(s) + ' positive, ' + str(o) + ' negative'
 
         facts = []
+
+        # Always add accurate dasha dates
+        try:
+            dasha_data = self.engine.get_vimshottari_dasha()
+            maha = dasha_data.get('mahadasha', {})
+            antar = dasha_data.get('antardasha', {})
+            from datetime import datetime as dt_class
+            current_d = self.engine.get_dasha_for_date(dt_class.now())
+            facts.append('DASHA DATES: Mahadasha ' + str(maha.get('lord', '')) + ' ends ' + str(maha.get('end', ''))[:10] + '. Antardasha ' + str(antar.get('lord', '')) + ' ends ' + str(antar.get('end', ''))[:10] + '. Current: ' + str(current_d.get('dasha_string', '')))
+        except Exception:
+            pass
+
+        # Always add planet positions for accuracy
+        try:
+            placements = []
+            for p in ['Sun','Moon','Mars','Mercury','Jupiter','Venus','Saturn','Rahu','Ketu']:
+                planet = self.engine.planets.get(p, {})
+                h = planet.get('house', '?')
+                r = planet.get('rashi_name', '?')
+                retro = ' (R)' if planet.get('retrograde', False) else ''
+                combust = ' (COMBUST)' if planet.get('combust', False) else ''
+                placements.append(f'{p}:H{h}-{r}{retro}{combust}')
+            facts.append('PLANET POSITIONS: ' + ', '.join(placements))
+        except Exception:
+            pass
+
+        # Add nakshatra data
+        try:
+            nak = self.engine.get_nakshatra_profile()
+            moon_nak = nak.get('moon_profile', {})
+            facts.append('NAKSHATRA: Moon in ' + str(moon_nak.get('nakshatra', '')) + ' Pada ' + str(moon_nak.get('pada', '')) + ', Ruler: ' + str(moon_nak.get('ruler', '')) + ', Deity: ' + str(moon_nak.get('deity', '')) + ', Symbol: ' + str(moon_nak.get('symbol', '')))
+        except Exception:
+            pass
+
+        # DIRECT injection of year outlook and varshaphal from sections
+        for section in sections:
+            src = section.get('source', '')
+            dat = section.get('data', '')
+            
+            if src.startswith('year_') and src != 'year_dasha':
+                area = src.replace('year_', '').upper()
+                if isinstance(dat, dict):
+                    facts.insert(0, area + ' OUTLOOK: ' + str(dat.get('summary', str(dat)[:100])))
+                elif isinstance(dat, str):
+                    facts.insert(0, area + ' OUTLOOK: ' + dat[:150])
+            
+            if src == 'Life Timeline':
+                if isinstance(dat, str):
+                    facts.insert(0, 'LIFE TIMELINE: ' + dat[:300])
+
+            if src == 'varshaphal' or src == 'Varshaphal':
+                if isinstance(dat, dict):
+                    facts.insert(0, 'ANNUAL FORECAST: ' + str(dat.get('rating', '')) + '. ' + str(dat.get('summary', '')))
+                elif isinstance(dat, str):
+                    facts.insert(0, 'ANNUAL FORECAST: ' + dat[:150])
+
+        # Add vargottama planets
+        try:
+            nav = self.engine.get_navamsa_analysis()
+            vargo = nav.get('vargottama_planets', [])
+            if vargo:
+                facts.append('VARGOTTAMA PLANETS: ' + ', '.join(vargo) + ' (same sign in birth and navamsa chart)')
+            else:
+                facts.append('VARGOTTAMA: None')
+        except Exception:
+            pass
+        # Inject definitive data
+        for dk, dv in definitive_data.items():
+            if isinstance(dv, str) and dv:
+                facts.insert(0, "DEFINITIVE: " + dv)
         asc_name = self.engine.ascendant.get('rashi_name', '')
         moon_name = self.engine.planets.get('Moon', {}).get('rashi_name', '')
         facts.append(asc_name + ' rising with Moon in ' + moon_name)
@@ -602,10 +1112,137 @@ class DataAssembler:
         except Exception:
             pass
 
+        # Mantra data
+        mantra_data = ''
+        for section in sections:
+            src = section.get('source', '')
+            dat = section.get('data', '')
+            if 'mantra' in src.lower() and 'dynamic' not in src.lower():
+                mantra_data = dat
+
+        # Lucky numbers data
+        lucky_data = ''
+        for section in sections:
+            src = section.get('source', '')
+            dat = section.get('data', '')
+            if 'lucky_numbers' in src.lower():
+                lucky_data = dat
+
+        # Gemstone data
+        gemstone_data = ''
+        for section in sections:
+            src = section.get('source', '')
+            dat = section.get('data', '')
+            if 'gemstone' in src.lower() or 'full_remedies' in src.lower():
+                gemstone_data = dat
+
+        # Add delivery data to facts
+        if mantra_data:
+            try:
+                import json
+                if isinstance(mantra_data, str):
+                    md = json.loads(mantra_data) if mantra_data.startswith('{') else {}
+                else:
+                    md = mantra_data
+                if isinstance(md, dict):
+                    pm = md.get('primary_mantra', '')
+                    pp = md.get('primary_planet', '')
+                    reason = md.get('reason', '')
+                    count = md.get('count', 108)
+                    if pm:
+                        facts.append(f'Mantra: {pm} (for {pp}, {reason}). Chant {count} times')
+            except Exception:
+                pass
+
+        if lucky_data:
+            try:
+                import json
+                if isinstance(lucky_data, str):
+                    ld = json.loads(lucky_data) if lucky_data.startswith('{') else {}
+                else:
+                    ld = lucky_data
+                if isinstance(ld, dict):
+                    mulank = ld.get('mulank', '')
+                    bhagyank = ld.get('bhagyank', '')
+                    lucky_digits = ld.get('lucky_single_digits', [])
+                    avoid = ld.get('avoid_numbers', [])
+                    if lucky_digits:
+                        facts.append(f'Lucky numbers: {lucky_digits}. Birth number: {mulank}. Destiny number: {bhagyank}. Avoid: {avoid}')
+            except Exception:
+                pass
+
+        if gemstone_data:
+            try:
+                import json
+                if isinstance(gemstone_data, str):
+                    gd = json.loads(gemstone_data) if gemstone_data.startswith('{') else {}
+                else:
+                    gd = gemstone_data
+                if isinstance(gd, list) and len(gd) > 0:
+                    g = gd[0]
+                    facts.append(f"Primary gemstone: {g.get('gemstone', '')} for {g.get('planet', '')}. Wear on {g.get('finger', '')} on {g.get('day_to_wear', '')}. Weight: {g.get('weight', '')}. Metal: {g.get('metal', '')}")
+                elif isinstance(gd, dict) and 'gemstone_recommendations' in gd:
+                    recs = gd['gemstone_recommendations']
+                    if recs:
+                        g = recs[0]
+                        facts.append(f"Primary gemstone: {g.get('gemstone', '')} for {g.get('planet', '')}. Wear on {g.get('finger', '')} on {g.get('day_to_wear', '')}. Weight: {g.get('weight', '')}. Metal: {g.get('metal', '')}")
+            except Exception:
+                pass
+
+        # Add time-specific data to facts — INSERT AT TOP so LLM sees them first
+        if transit_info:
+            facts.insert(0, 'KEY TRANSITS: ' + transit_info)
+        if varshaphal_info:
+            facts.insert(0, 'ANNUAL PREDICTION: ' + varshaphal_info)
+        if year_dasha_info:
+            facts.insert(0, 'FOR THAT PERIOD DASHA IS: ' + year_dasha_info + ' — USE THIS, not current dasha')
+
         hook = self._suggest_hook(intent, chakra_info, navamsa_info, supports)
 
         worried = intent_data.get('is_worried', False)
         user_mood = 'Worried, needs empathy first' if worried else (mood_line if mood_line else 'Curious, be direct')
+
+        # Add delivery data to facts if present
+        if delivery_data.get('mantra'):
+            md = delivery_data['mantra']
+            if isinstance(md, dict):
+                facts.append('EXACT MANTRA: ' + md.get('primary_mantra', '') + ' (for ' + md.get('primary_planet', '') + ', ' + md.get('reason', '') + '). Chant ' + str(md.get('count', 108)) + ' times. Best time: ' + md.get('best_time', 'morning'))
+                if md.get('day_mantra') and md.get('day_mantra') != md.get('primary_mantra'):
+                    facts.append('DAY MANTRA: ' + md.get('day_mantra', '') + ' (for ' + md.get('day_planet', '') + ')')
+            elif isinstance(md, str):
+                facts.append('MANTRA DATA: ' + md[:200])
+
+        if delivery_data.get('lucky_numbers'):
+            ld = delivery_data['lucky_numbers']
+            if isinstance(ld, dict):
+                facts.append('EXACT LUCKY NUMBERS: ' + str(ld.get('lucky_single_digits', [])) + '. Birth number (Mulank): ' + str(ld.get('mulank', '')) + '. Destiny number (Bhagyank): ' + str(ld.get('bhagyank', '')) + '. Avoid: ' + str(ld.get('avoid_numbers', [])))
+            elif isinstance(ld, str):
+                facts.append('LUCKY DATA: ' + ld[:200])
+
+        if delivery_data.get('numerology'):
+            nd = delivery_data['numerology']
+            if isinstance(nd, dict):
+                facts.append('NUMEROLOGY: ' + nd.get('summary', ''))
+
+        if delivery_data.get('gemstone'):
+            gd = delivery_data['gemstone']
+            if isinstance(gd, list) and len(gd) > 0:
+                g = gd[0]
+                facts.append('EXACT GEMSTONE: ' + str(g.get('gemstone', '')) + ' for ' + str(g.get('planet', '')) + '. Finger: ' + str(g.get('finger', '')) + '. Day: ' + str(g.get('day_to_wear', '')) + '. Weight: ' + str(g.get('weight', '')) + '. Metal: ' + str(g.get('metal', '')) + '. Mantra: ' + str(g.get('mantra_while_wearing', '')))
+                if len(gd) > 1:
+                    g2 = gd[1]
+                    facts.append('SECONDARY GEMSTONE: ' + str(g2.get('gemstone', '')) + ' for ' + str(g2.get('planet', '')))
+
+        if delivery_data.get('remedies'):
+            rd = delivery_data['remedies']
+            if isinstance(rd, dict):
+                gems = rd.get('gemstone_recommendations', [])
+                if gems and len(gems) > 0:
+                    g = gems[0]
+                    facts.append('EXACT GEMSTONE: ' + g.get('gemstone', '') + ' for ' + g.get('planet', '') + '. Finger: ' + g.get('finger', '') + '. Day: ' + g.get('day_to_wear', '') + '. Weight: ' + g.get('weight', '') + '. Metal: ' + g.get('metal', '') + '. Mantra while wearing: ' + g.get('mantra_while_wearing', ''))
+                    if len(gems) > 1:
+                        g2 = gems[1]
+                        facts.append('SECONDARY GEMSTONE: ' + g2.get('gemstone', '') + ' for ' + g2.get('planet', '') + '. Finger: ' + g2.get('finger', ''))
 
         brief = 'DATA:\n'
         brief += 'TOPIC: ' + intent.upper() + '\n'
@@ -614,22 +1251,25 @@ class DataAssembler:
         brief += 'USER MOOD: ' + user_mood + '\n'
         if hook:
             brief += 'HOOK DIRECTION: ' + hook
-        # Generate FULL response — LLM only adds hook
-        try:
-            from .response_writer import write_full_response
-            briefing_data = {
-                'verdict': verdict,
-                'facts': facts,
-                'hook': hook,
-                'mood': user_mood,
-                'topic': intent,
-            }
-            response_text = write_full_response(intent, briefing_data)
-            brief += '\nRESPONSE (output this EXACTLY, then add hook):\n' + response_text
-            brief += '\n\nKEY FACTS FOR HOOK: ' + '. '.join(facts[:4])
-            brief += '\nHOOK DIRECTION: ' + hook
-        except Exception:
-            pass
+        # Generate response skeleton — skip for delivery mode and topics with dedicated data
+        is_delivery = intent_data.get('is_delivery', False)
+        skip_topics = ('yogas', 'dasha', 'transit', 'numerology', 'mantra', 'gemstone', 'remedies', 'daily', 'vastu', 'personality')
+        if not is_delivery and intent not in skip_topics:
+            try:
+                from .response_writer import write_full_response
+                briefing_data = {
+                    'verdict': verdict,
+                    'facts': facts,
+                    'hook': hook,
+                    'mood': user_mood,
+                    'topic': intent,
+                }
+                response_text = write_full_response(intent, briefing_data)
+                brief += '\nRESPONSE (output this EXACTLY, then add hook):\n' + response_text
+                brief += '\n\nKEY FACTS FOR HOOK: ' + '. '.join(facts[:4])
+                brief += '\nHOOK DIRECTION: ' + hook
+            except Exception:
+                pass
 
         return brief
 
@@ -655,21 +1295,103 @@ class DataAssembler:
         return clean
 
     def _suggest_hook(self, intent, chakra, navamsa, supports):
-        if chakra and 'Sacral' in chakra:
-            return 'Tease the blocked sexual energy and mention a specific mantra exists for it'
-        if chakra and 'Heart' in chakra:
-            return 'Tease the blocked heart energy and a practice to open it'
+        import random
+        
+        # Intent-specific hooks — deep and varied
+        intent_hooks = {
+            'marriage': [
+                'Hint at what the soul chart reveals about their ideal partner personality',
+                'Tease a specific year when marriage energy peaks in their chart',
+                'Mention that the navamsa shows a surprising quality in their future spouse',
+                'Hint at a compatibility factor most people overlook',
+            ],
+            'love': [
+                'Tease what Venus placement reveals about their love pattern',
+                'Hint at a timing window when new romantic energy enters their life',
+                'Mention a hidden emotional pattern from their Moon placement',
+            ],
+            'career': [
+                'Hint at a hidden talent connected to their 10th house that they havent explored',
+                'Tease a specific industry or field that aligns with their chart',
+                'Mention that their chart shows leadership potential activating soon',
+                'Hint at a timing window for a career breakthrough',
+            ],
+            'wealth': [
+                'Tease the specific year or transit when wealth peaks',
+                'Hint at an unconventional income source their chart supports',
+                'Mention a specific planet activation that triggers financial growth',
+            ],
+            'business': [
+                'Hint at what type of business their chart naturally supports',
+                'Tease a timing window for launching or expanding',
+                'Mention a partnership energy that could multiply their success',
+            ],
+            'health': [
+                'Hint at a specific gemstone that supports their weak areas',
+                'Tease a daily practice tied to their ascendant for vitality',
+                'Mention a chakra alignment that could shift their energy',
+            ],
+            'spiritual': [
+                'Hint at a past life pattern visible in their chart',
+                'Tease a meditation technique aligned with their nakshatra',
+                'Mention that their chart shows a rare spiritual configuration',
+            ],
+            'children': [
+                'Hint at what the 5th house reveals about their childs nature',
+                'Tease a timing window for conception energy',
+            ],
+            'education': [
+                'Hint at a subject or field their Mercury placement naturally excels in',
+                'Tease a timing window for academic breakthroughs',
+            ],
+            'travel': [
+                'Hint at specific directions or countries their chart favors',
+                'Tease a transit that opens the door for permanent relocation',
+            ],
+            'legal': [
+                'Hint at the timing when legal matters resolve favorably',
+                'Tease a remedy that strengthens their 6th house advantage',
+            ],
+            'property': [
+                'Hint at the best timing for property decisions in their chart',
+                'Tease a direction (vastu) that maximizes property luck',
+            ],
+        }
+        
+        # Chakra-based hooks
+        if chakra:
+            if 'Sacral' in chakra:
+                return 'Hint at a practice that can unblock their creative and intimate energy'
+            if 'Heart' in chakra:
+                return 'Tease a breathing technique tied to their Moon that opens emotional flow'
+            if 'Throat' in chakra:
+                return 'Hint at how their Mercury placement connects to self-expression power'
+            if 'Third Eye' in chakra:
+                return 'Tease an intuition practice aligned with their nakshatra'
+            if 'Root' in chakra:
+                return 'Hint at a grounding practice connected to their Saturn placement'
+        
+        # Navamsa hooks for relationship topics
         if intent in ('marriage', 'love') and navamsa:
-            return 'Tease what their ideal partner looks like from the soul chart'
-        if intent in ('wealth', 'business') and len(supports) >= 3:
-            return 'Tease the specific timing when wealth peaks'
-        if intent == 'career':
-            return 'Tease a hidden talent or specific career direction'
-        if intent == 'health':
-            return 'Tease a specific gemstone or daily practice for health'
-        if intent in ('foreign', 'travel'):
-            return 'Tease the specific timing window for travel'
-        return 'Tease a specific mantra or timing from the chart'
+            hooks = intent_hooks.get(intent, [])
+            return random.choice(hooks) if hooks else 'Tease what the soul chart reveals about their partner'
+        
+        # Intent-specific
+        if intent in intent_hooks:
+            return random.choice(intent_hooks[intent])
+        
+        # Generic but varied fallbacks — NEVER just "mantra"
+        generic_hooks = [
+            'Hint at a specific planet activation happening in the next few months',
+            'Tease a timing window where multiple positive transits converge',
+            'Mention that their chart has an unusual configuration worth exploring deeper',
+            'Hint at how their current dasha lord connects to an unexpected area of life',
+            'Tease that their nakshatra holds a specific gift most people never discover',
+            'Hint at a gemstone-planet connection that could shift their daily energy',
+            'Mention a specific date range when their chart energy peaks this year',
+            'Tease what their ascendant lord reveals about their life purpose',
+        ]
+        return random.choice(generic_hooks)
 
 
 
