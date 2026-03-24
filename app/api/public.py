@@ -507,3 +507,167 @@ async def check_compatibility(request_body: dict):
         raise
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@router.post("/match")
+async def match_compatibility(request: Request, body: dict):
+    """Ashtakoota compatibility matching between two charts"""
+    try:
+        from app.services.jyotish_engine import JyotishEngine
+        from datetime import datetime
+        
+        kundli_data = body.get('kundli_data', {})
+        partner = body.get('partner', {})
+        
+        # Get person 1's birth details from kundli_data
+        raw = kundli_data.get('raw', {})
+        bd = raw.get('birth_details', {})
+        
+        # Create engine for person 1
+        e1 = JyotishEngine(
+            datetime(
+                int(bd.get('year', 2000)),
+                int(bd.get('month', 1)),
+                int(bd.get('day', 1)),
+                int(bd.get('hour', 12)),
+                int(bd.get('minute', 0))
+            ),
+            float(bd.get('latitude', 28.6)),
+            float(bd.get('longitude', 77.2))
+        )
+        
+        # Create engine for person 2
+        e2 = JyotishEngine(
+            datetime(
+                int(partner.get('year', 2000)),
+                int(partner.get('month', 1)),
+                int(partner.get('day', 1)),
+                int(partner.get('hour', 12)),
+                int(partner.get('minute', 0))
+            ),
+            float(partner.get('lat', 28.6)),
+            float(partner.get('lng', 77.2))
+        )
+        
+        # Run ashtakoota matching
+        moon2_long = e2.planets['Moon']['longitude']
+        result = e1.match_compatibility(moon2_long)
+        
+        # Format kootas for frontend
+        kootas_list = []
+        for key in ['varna', 'vashya', 'tara', 'yoni', 'graha_maitri', 'gana', 'bhakoot', 'nadi']:
+            k = result.get('kootas', {}).get(key, {})
+            kootas_list.append({
+                'name': k.get('koota', key),
+                'score': k.get('points', 0),
+                'max': k.get('max_points', 0),
+                'description': k.get('description', ''),
+            })
+        
+        return {
+            'success': True,
+            'data': {
+                'total_score': result.get('total_points', 0),
+                'max_score': 36,
+                'percentage': result.get('percentage', 0),
+                'compatibility': result.get('compatibility', ''),
+                'recommendation': result.get('recommendation', ''),
+                'kootas': kootas_list,
+                'doshas': result.get('doshas', []),
+                'has_major_dosha': result.get('has_major_dosha', False),
+                'boy': result.get('boy', {}),
+                'girl': result.get('girl', {}),
+            }
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+@router.post("/soul-profile")
+async def generate_soul_profile(request: Request, body: dict):
+    try:
+        from app.services.jyotish_engine import JyotishEngine
+        from app.core.config import settings
+        from datetime import datetime
+        import json
+        import httpx
+
+        kundli_data = body.get("kundli_data", {})
+        language = body.get("language", "en")
+        raw = kundli_data.get("raw", {})
+        bd = raw.get("birth_details", {})
+
+        e = JyotishEngine(
+            datetime(int(bd.get("year",2000)), int(bd.get("month",1)), int(bd.get("day",1)),
+                     int(bd.get("hour",12)), int(bd.get("minute",0))),
+            float(bd.get("latitude", 28.6)), float(bd.get("longitude", 77.2))
+        )
+
+        ascendant = e.planets.get("Ascendant", {}).get("rashi_name", "Pisces")
+        moon_sign = e.planets.get("Moon", {}).get("rashi_name", "Gemini")
+        moon_nak = e.get_nakshatra_profile().get("moon_profile", {})
+        nakshatra = moon_nak.get("nakshatra", "Ardra")
+        yogas = e.get_yogas()
+        yoga_names = [y.get("name", "") for y in yogas.get("highlights", [])][:3]
+
+        planet_summary = []
+        for p in ["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn"]:
+            pd = e.planets.get(p, {})
+            planet_summary.append(p + " H" + str(pd.get("house","?")) + "-" + str(pd.get("rashi_name","?")))
+
+        lang_note = ""
+        if language == "hi":
+            lang_note = "Respond in Hindi Devanagari script."
+        elif language != "en":
+            lm = {"zh":"Chinese","es":"Spanish","pt":"Portuguese","ja":"Japanese"}
+            lang_note = "Respond in " + lm.get(language, "English") + "."
+
+        chart = "Asc:" + ascendant + " Moon:" + moon_sign + "/" + nakshatra
+        chart += " Yogas:" + (",".join(yoga_names) if yoga_names else "none")
+        chart += " " + " ".join(planet_summary)
+
+        prompt = (
+            "You are a Vedic astrology poet. Chart: " + chart + ". "
+            "Return ONLY valid JSON, no markdown, no backticks: "
+            '{"archetype":"2-3 word personal title like The Restless Flame",'
+            '"dharma":"4-6 word phrase about life purpose from 10th house",'
+            '"karma":"4-6 word phrase about karmic lesson from ascendant",'
+            '"kama":"4-6 word phrase about desire from Venus/7th house",'
+            '"moksha":"4-6 word phrase about liberation from 12th/Ketu"} '
+            "Be poetic but specific to THIS chart. " + lang_note
+        )
+
+        resp = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer " + settings.OPENROUTER_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "deepseek/deepseek-chat",
+                "max_tokens": 300,
+                "temperature": 0.7,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=15.0,
+        )
+
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+
+        try:
+            result = json.loads(text)
+        except Exception:
+            result = {
+                "archetype": "Seeker of Truth",
+                "dharma": "purpose unfolds in silence",
+                "karma": "learn through experience",
+                "kama": "heart seeks connection",
+                "moksha": "freedom through understanding"
+            }
+
+        return {"success": True, "data": result}
+
+    except Exception as ex:
+        return {"success": False, "error": str(ex)}
+
