@@ -1,3 +1,4 @@
+from datetime import datetime
 """
 ORACLE — PROMPT BUILDER
 
@@ -201,8 +202,12 @@ def build_oracle_prompt(intent_data: Dict, data_packet: Dict, user_message: str)
     if is_delivery:
         delivery_note = "IMPORTANT: The user asked for something specific. GIVE the actual answer from the data. The data contains the real mantra text, real numbers, real gemstone name. Use THAT data. Do NOT invent. Do NOT add a hook line at the end. Just deliver clearly."
     
+    today = datetime.now().strftime("%B %d, %Y")
+
     if needs_chart:
         prompt = f"""{ORACLE_PERSONA}
+
+TODAY IS: {today}. All dates you mention must be in the present or future. Never suggest past dates.
 
 ═══ CHART DATA ═══
 {briefing}
@@ -211,7 +216,7 @@ def build_oracle_prompt(intent_data: Dict, data_packet: Dict, user_message: str)
 {oracle_instruction}
 {delivery_note}
 {lang_note}
-Maximum {max_words} words. End with one hook line starting with "I notice..." or "There is..." unless this is a delivery."""
+Maximum {max_words} words. End with one hook line (in the SAME language as your response) starting with a phrase like "I notice..." or "There is..." (or the equivalent in the response language, e.g. Hindi: "मैंने देखा..." or "एक और बात..."). Do NOT write the hook in English if the response is in another language. Skip the hook if this is a delivery."""
     else:
         prompt = f"""{ORACLE_PERSONA}
 

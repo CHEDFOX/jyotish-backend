@@ -1244,6 +1244,106 @@ class DataAssembler:
                         g2 = gems[1]
                         facts.append('SECONDARY GEMSTONE: ' + g2.get('gemstone', '') + ' for ' + g2.get('planet', '') + '. Finger: ' + g2.get('finger', ''))
 
+
+        # ═══ BPHS ENRICHMENT — inject classical depth ═══
+        try:
+            # 1. Avasthas — planet states (always useful)
+            avasthas = self.engine.get_avasthas()
+            avastha_lines = []
+            for pname, av in avasthas.items():
+                bm = av.get('bala_mrita', {})
+                dp = av.get('deeptadi', {})
+                age = bm.get('avastha', '')
+                mood = dp.get('avastha', '')
+                age_desc = bm.get('description', '')
+                mood_desc = dp.get('meaning', '')
+                # Only report notable states (not average/neutral)
+                notable = []
+                if age in ('Bala', 'Mrita'):
+                    notable.append(age + ' (' + age_desc + ')')
+                elif age == 'Yuva':
+                    notable.append('Yuva (peak strength)')
+                if mood in ('Deepta', 'Swastha'):
+                    notable.append(mood + ' (' + mood_desc.split(' — ')[0] + ')')
+                elif mood in ('Vikala', 'Khala', 'Kopa'):
+                    notable.append(mood + ' (' + mood_desc.split(' — ')[0] + ')')
+                if notable:
+                    avastha_lines.append(pname + ': ' + ', '.join(notable))
+            if avastha_lines:
+                facts.append('PLANET STATES: ' + '. '.join(avastha_lines[:5]))
+        except Exception:
+            pass
+
+        try:
+            # 2. Vimshopaka — definitive planet strength ranking
+            vimshopaka = self.engine.get_vimshopaka()
+            ranked = sorted(vimshopaka.values(), key=lambda x: x.get('vimshopaka', 0), reverse=True)
+            if ranked:
+                strongest = ranked[0]
+                weakest = ranked[-1]
+                facts.append('PLANET STRENGTH RANKING: Strongest=' + strongest['planet'] + ' (' + str(strongest['vimshopaka']) + '/20), Weakest=' + weakest['planet'] + ' (' + str(weakest['vimshopaka']) + '/20)')
+        except Exception:
+            pass
+
+        try:
+            # 3. Dasha Sandhi — critical for timing
+            sandhi = self.engine.get_dasha_sandhi()
+            if sandhi.get('in_sandhi'):
+                for sd in sandhi.get('sandhi_details', []):
+                    facts.insert(0, 'WARNING - DASHA SANDHI: ' + sd.get('description', '') + '. ' + sd.get('advice', ''))
+        except Exception:
+            pass
+
+        try:
+            # 4. Graha Yuddha — if any planets at war
+            yuddha = self.engine.get_graha_yuddha()
+            if yuddha.get('has_war'):
+                for war in yuddha.get('wars', []):
+                    facts.append('PLANETARY WAR: ' + war['planet1'] + ' vs ' + war['planet2'] + ' — ' + war['winner'] + ' wins, ' + war['loser'] + ' weakened')
+        except Exception:
+            pass
+
+        try:
+            # 5. Maraka — for health/longevity questions
+            if intent in ('health', 'health_issue', 'longevity', 'death'):
+                maraka = self.engine.get_maraka()
+                facts.append('MARAKA PLANETS: ' + ', '.join(maraka.get('maraka_planets', [])) + '. Badhaka: ' + str(maraka.get('badhaka_lord', '')))
+        except Exception:
+            pass
+
+        try:
+            # 6. Nabhasa Yogas — for personality/life pattern questions
+            if intent in ('personality', 'general', 'life', 'general_chat'):
+                nabhasa = self.engine.get_nabhasa_yogas()
+                for y in nabhasa.get('yogas', [])[:2]:
+                    if y.get('name') != 'Samanya':
+                        facts.append('PATTERN: ' + y['name'] + ' yoga — ' + y['description'])
+        except Exception:
+            pass
+
+        try:
+            # 7. Sannyasa — for spiritual questions
+            if intent in ('spiritual', 'moksha', 'meditation', 'purpose'):
+                sann = self.engine.get_sannyasa_yogas()
+                for y in sann.get('yogas', [])[:2]:
+                    facts.append('SPIRITUAL: ' + y['name'] + ' — ' + y['description'])
+        except Exception:
+            pass
+
+        try:
+            # 8. Rashi Drishti — sign aspects for key planets
+            rdrishti = self.engine.get_rashi_drishti()
+            asc_sign = self.engine.ascendant.get('rashi_name', '')
+            for pname in ['Saturn', 'Jupiter', 'Rahu']:
+                pd = rdrishti.get(pname, {})
+                asp_planets = pd.get('aspects_planets', [])
+                if asp_planets:
+                    names = [a['planet'] for a in asp_planets[:3]]
+                    facts.append(pname + ' rashi-aspects: ' + ', '.join(names))
+        except Exception:
+            pass
+
+
         brief = 'DATA:\n'
         brief += 'TOPIC: ' + intent.upper() + '\n'
         brief += 'VERDICT: ' + verdict + '\n'

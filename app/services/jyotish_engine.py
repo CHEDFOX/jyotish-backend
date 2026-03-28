@@ -96,6 +96,8 @@ from .predictions.dynamic_extras import DynamicRemedies, LuckyNumberFinder, Dyna
 from .predictions.chart_promise import ChartPromise
 
 
+from app.services.bphs import (calculate_all_avasthas, calculate_vimshopaka, calculate_graha_yuddha, calculate_nabhasa_yogas, calculate_sannyasa_yogas, calculate_maraka, calculate_sodhana_for_all, calculate_prastara, calculate_shodhya_pinda, calculate_dasha_sandhi, calculate_rashi_drishti)
+
 class JyotishEngine:
     """
     Master Jyotish Engine - Complete Vedic Astrology Calculator
@@ -813,6 +815,61 @@ class JyotishEngine:
             'transits': self.get_current_transits()['overall_period'],
             'sade_sati': self.check_sade_sati()['is_sade_sati'],
         }
+
+    # ═══════════════════════════════════════════════════════════════
+    # BPHS COMPLETION — 15 remaining classical features
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_avasthas(self):
+        """BPHS Ch45: All 4 types of planetary avasthas."""
+        dignity = self.get_planetary_dignity()
+        return calculate_all_avasthas(self.planets, dignity)
+
+    def get_vimshopaka(self, scheme='shodashavarga'):
+        """BPHS Ch16: 20-point divisional chart strength."""
+        return calculate_vimshopaka(self.planets, scheme)
+
+    def get_graha_yuddha(self):
+        """BPHS Ch17: Planetary war detection."""
+        return calculate_graha_yuddha(self.planets)
+
+    def get_nabhasa_yogas(self):
+        """BPHS Ch34: 32 pattern-based yogas."""
+        return calculate_nabhasa_yogas(self.planets)
+
+    def get_sannyasa_yogas(self):
+        """BPHS Ch36: Renunciation and spiritual seeker yogas."""
+        asc_rashi = self.planets.get('Ascendant', {}).get('rashi', 0)
+        return calculate_sannyasa_yogas(self.planets, asc_rashi)
+
+    def get_maraka(self):
+        """BPHS Ch44: Death-inflicting planet analysis."""
+        asc_rashi = self.planets.get('Ascendant', {}).get('rashi', 0)
+        return calculate_maraka(self.planets, asc_rashi)
+
+    def get_av_sodhana(self):
+        """BPHS Ch43: Ashtakavarga reduction (Trikona + Ekadhipati)."""
+        av = self.get_ashtakavarga()
+        return calculate_sodhana_for_all(av)
+
+    def get_prastara_av(self):
+        """BPHS Ch43: Individual planet contribution tables."""
+        return calculate_prastara(self.planets)
+
+    def get_shodhya_pinda(self):
+        """BPHS Ch43: Numerical strength from reduced AV."""
+        sodhita = self.get_av_sodhana()
+        return calculate_shodhya_pinda(sodhita, self.planets)
+
+    def get_dasha_sandhi(self):
+        """BPHS Ch40: Dasha junction/chidra period analysis."""
+        from datetime import datetime as dt_class
+        dasha = self.get_dasha_for_date(dt_class.now())
+        return calculate_dasha_sandhi(dasha)
+
+    def get_rashi_drishti(self):
+        """BPHS Ch28: Sign-based aspects."""
+        return calculate_rashi_drishti(self.planets)
 
 
 def create_engine(birth_datetime: datetime, latitude: float, longitude: float,

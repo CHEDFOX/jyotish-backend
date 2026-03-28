@@ -232,9 +232,46 @@ async def oracle_chat(request_body: ChatRequest, request: Request):
                 data = response.json()
                 oracle_response = data["choices"][0]["message"]["content"]
 
+        # Log conversation for research
+        try:
+            import json as jjson
+            from pathlib import Path
+            log_dir = Path("/var/www/jyotish/backend/logs")
+            log_dir.mkdir(exist_ok=True)
+            log_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "message": request_body.message,
+                "response": oracle_response,
+                "hook": "",
+                "intent": oracle_result['intent']['primary'],
+                "language": oracle_result['intent'].get('language', 'en'),
+                "processing_ms": oracle_result['processing_time_ms'],
+            }
+            with open(log_dir / "conversations.jsonl", "a") as lf:
+                lf.write(jjson.dumps(log_entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+        # Split hook from response
+        hook_line = ""
+        if oracle_response and "\n\n" in oracle_response:
+            parts = oracle_response.rsplit("\n\n", 1)
+            last = parts[-1].strip()
+            hook_starters = ["I notice", "I see", "There is", "There's", "Interestingly",
+                             "What's interesting", "One thing", "Something",
+                             "दिलचस्प", "मैंने देखा", "मुझे दिख", "एक और बात",
+                             "मैं देख", "यहाँ एक", "आपके", "विशेष",
+                             "注意到", "有趣的是", "值得注意",
+                             "Noto que", "Percebo", "Lo interesante",
+                             "気づいた", "興味深い"]
+            if any(last.startswith(s) for s in hook_starters):
+                oracle_response = parts[0].strip()
+                hook_line = last
+
         # Return response with metadata
         return {
             "response": oracle_response,
+            "hook": hook_line,
             "intent": oracle_result['intent']['primary'],
             "tone": oracle_result['intent']['tone'],
             "confidence": oracle_result['intent']['confidence'],
@@ -667,6 +704,68 @@ async def generate_soul_profile(request: Request, body: dict):
             }
 
         return {"success": True, "data": result}
+
+    except Exception as ex:
+        return {"success": False, "error": str(ex)}
+
+
+@router.post("/register-push")
+async def register_push_token(request: Request, body: dict):
+    """Register a user's Expo push token for notifications."""
+    try:
+        import json as jjson
+        from pathlib import Path
+
+        user_id = body.get("user_id", "")
+        push_token = body.get("push_token", "")
+        birth_details = body.get("birth_details", {})
+        language = body.get("language", "en")
+
+        if not push_token:
+            return {"success": False, "error": "No push token provided"}
+
+        data_dir = Path("/var/www/jyotish/backend/data")
+        data_dir.mkdir(exist_ok=True)
+        users_file = data_dir / "push_users.jsonl"
+
+        # Load existing users
+        existing = []
+        if users_file.exists():
+            with open(users_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            existing.append(jjson.loads(line))
+                        except jjson.JSONDecodeError:
+                            pass
+
+        # Update or add user
+        found = False
+        for user in existing:
+            if user.get("user_id") == user_id:
+                user["push_token"] = push_token
+                user["birth_details"] = birth_details
+                user["language"] = language
+                user["updated_at"] = datetime.now().isoformat()
+                found = True
+                break
+
+        if not found:
+            existing.append({
+                "user_id": user_id,
+                "push_token": push_token,
+                "birth_details": birth_details,
+                "language": language,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            })
+
+        with open(users_file, "w") as f:
+            for user in existing:
+                f.write(jjson.dumps(user, ensure_ascii=False) + "\n")
+
+        return {"success": True, "message": "Push token registered"}
 
     except Exception as ex:
         return {"success": False, "error": str(ex)}
