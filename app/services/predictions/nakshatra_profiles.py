@@ -62,9 +62,13 @@ PADA_PROFILES = {
 class NakshatraProfiles:
     def __init__(self, engine):
         self.engine = engine
-        self.moon_nak = engine.planets.get('Moon', {}).get('nakshatra_name', '')
-        self.moon_pada = engine.planets.get('Moon', {}).get('pada', 1)
-        self.moon_longitude = engine.planets.get('Moon', {}).get('longitude', 0)
+        moon = engine.planets.get('Moon', {})
+        self.moon_longitude = moon.get('longitude', 0)
+        from ..core.utils import get_nakshatra_from_longitude, get_nakshatra_pada
+        from ..core.constants import NAKSHATRA_NAMES
+        nak_idx = get_nakshatra_from_longitude(self.moon_longitude)
+        self.moon_nak = moon.get('nakshatra_name', '') or NAKSHATRA_NAMES[nak_idx]
+        self.moon_pada = moon.get('pada', None) or get_nakshatra_pada(self.moon_longitude)
 
     def get_moon_pada_profile(self) -> Dict:
         """Get detailed profile for birth Moon's nakshatra pada."""

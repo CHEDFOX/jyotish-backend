@@ -14,7 +14,8 @@ from .prompt_builder import build_oracle_prompt, build_system_prompt_only
 
 class OraclePipeline:
     def __init__(self):
-        self.conversation_history = []
+        pass
+        # history is passed per-request — not stored on instance
 
     def process(self, user_message: str, birth_data: Dict = None,
                 conversation_history: list = None) -> Dict:
@@ -22,7 +23,7 @@ class OraclePipeline:
         start_time = datetime.now()
 
         # Step 1: Classify
-        history = conversation_history or self.conversation_history
+        history = conversation_history or []
         intent = classify_intent(user_message, history)
 
         # Step 2-6: Same pipeline
@@ -34,7 +35,7 @@ class OraclePipeline:
         start_time = datetime.now()
 
         # Step 1: Classify with AI
-        history = conversation_history or self.conversation_history
+        history = conversation_history or []
         intent = await classify_intent_async(user_message, history)
 
         # Step 2-6: Same pipeline
@@ -72,7 +73,7 @@ class OraclePipeline:
         system_prompt = build_oracle_prompt(intent, data_packet, user_message)
 
         # Step 5: Track history
-        self.conversation_history.append(user_message)
+        # removed — history managed by caller per-request
 
         elapsed = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -82,7 +83,7 @@ class OraclePipeline:
             'intent': {
                 'primary': intent['primary_intent'],
                 'secondary': intent.get('secondary_intents', []),
-                'confidence': intent['confidence'],
+                'confidence': intent.get('confidence', 'medium'),
                 'tone': intent['emotional_tone'],
                 'emotion': intent.get('emotion', 'neutral'),
                 'entities': intent.get('entities', {}),

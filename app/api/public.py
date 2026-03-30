@@ -116,7 +116,7 @@ def _extract_birth_data(kundli_data: dict) -> dict:
 
 @router.post("/chat")
 async def oracle_chat(request_body: ChatRequest, request: Request):
-    # check_rate_limit(request, "chat", settings.RATE_LIMIT_CHAT)  # disabled for testing
+    check_rate_limit(request, "chat", settings.RATE_LIMIT_CHAT)
 
     try:
         from app.services.oracle.pipeline import process_oracle_query
@@ -166,10 +166,7 @@ async def oracle_chat(request_body: ChatRequest, request: Request):
                     python_response = response_part.strip()
 
         import sys
-        print(f"DEBUG: python_response length = {len(python_response)}", file=sys.stderr)
-        print(f"DEBUG: python_response[:50] = {python_response[:50]}", file=sys.stderr)
         if False and python_response:
-            print("DEBUG: USING PYTHON RESPONSE", file=sys.stderr)
             # Python wrote the response — LLM only generates hook
             hook_prompt = "Generate ONE hook line for an astrology reading about " + oracle_result['intent']['primary'] + ". "
             hook_prompt += "Facts: " + hook_facts + ". "

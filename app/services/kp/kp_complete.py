@@ -268,7 +268,14 @@ class KPComplete:
         denial_houses = set(config['denial'])
 
         cusps = self.get_placidus_cusps()
-        primary_house = list(promise_houses)[0]  # First house is primary
+        PRIMARY_CUSP = {
+            'marriage': 7, 'love': 5, 'career': 10, 'wealth': 2,
+            'childbirth': 5, 'property': 4, 'travel_foreign': 9,
+            'education': 9, 'health_issue': 6, 'job_change': 10,
+            'litigation_win': 6, 'spiritual': 9, 'vehicle': 4,
+            'business': 7, 'foreign': 9, 'general': 1,
+        }
+        primary_house = PRIMARY_CUSP.get(event, sorted(promise_houses)[0])
 
         # Get CSL of primary house
         cusp_data = cusps.get(primary_house, {})

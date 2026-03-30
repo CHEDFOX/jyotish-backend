@@ -1,15 +1,14 @@
 """
-JYOTISH ORACLE — PURE AI INTENT CLASSIFIER
+JYOTISH ORACLE - INTENT CLASSIFIER v4
+The routing brain. LLM reads available systems and decides what to call.
 
-No keywords. No hacks. Pure AI understanding.
-Works in ANY language on Earth.
-
-Speed strategy:
-1. Cache: Same question pattern → instant (0ms)
-2. Parallel: Classification runs alongside engine creation
-3. Compact prompt: 2-3s instead of 6-8s
-
-If AI fails (network/timeout): minimal keyword fallback as safety net.
+Design principles:
+- LLM decides everything - no keyword fallback
+- oracle_instruction points to DATA FIELDS only, never to conclusions
+  (prevents hallucination - the data decides the verdict, not the instruction)
+- All 20 systems documented accurately
+- Full timing chain awareness
+- 3 history messages for follow-up context
 """
 
 import re
@@ -17,44 +16,25 @@ import json
 import hashlib
 import httpx
 from typing import Dict, List, Optional
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from collections import OrderedDict
 from app.core.config import settings
 
 
-# ═══════════════════════════════════════════════════════════════════
-# CLASSIFICATION CACHE
-# ═══════════════════════════════════════════════════════════════════
-
 class ClassificationCache:
-    """Cache AI classifications. Similar questions get instant results."""
-
-    def __init__(self, max_size: int = 500, ttl_hours: int = 24):
+    def __init__(self, max_size=500, ttl_hours=24):
         self._cache = OrderedDict()
         self.max_size = max_size
         self.ttl = timedelta(hours=ttl_hours)
 
-    def _normalize(self, message: str) -> str:
-        """Normalize message for cache key — strips noise, keeps meaning."""
-        # Lowercase, remove extra spaces and punctuation
-        msg = message.lower().strip()
-        msg = re.sub(r'[^\w\s]', '', msg)
-        msg = re.sub(r'\s+', ' ', msg)
-        # Remove common filler words
-        fillers = {'please', 'can', 'you', 'tell', 'me', 'i', 'want', 'to', 'know',
-                   'about', 'my', 'the', 'a', 'an', 'is', 'are', 'will', 'would',
-                   'could', 'do', 'does', 'mujhe', 'batao', 'bataiye', 'kya', 'hai',
-                   'mera', 'meri', 'mere'}
-        words = [w for w in msg.split() if w not in fillers and len(w) > 1]
-        core = ' '.join(words[:8])  # First 8 meaningful words
-        return hashlib.md5(core.encode()).hexdigest()
+    def _key(self, message: str) -> str:
+        msg = re.sub(r'[^\w\s]', '', message.lower().strip())
+        words = [w for w in msg.split() if len(w) > 2][:8]
+        return hashlib.md5(' '.join(words).encode()).hexdigest()
 
     def get(self, message: str) -> Optional[Dict]:
-        key = self._normalize(message)
-        entry = self._cache.get(key)
+        entry = self._cache.get(self._key(message))
         if entry and datetime.now() - entry['time'] < self.ttl:
-            entry['hits'] += 1
-            # Return a copy with updated message
             result = dict(entry['result'])
             result['original_message'] = message
             result['cache_hit'] = True
@@ -62,246 +42,209 @@ class ClassificationCache:
         return None
 
     def put(self, message: str, result: Dict):
-        key = self._normalize(message)
         if len(self._cache) >= self.max_size:
-            self._cache.popitem(last=False)  # Remove oldest
-        self._cache[key] = {
-            'result': result,
-            'time': datetime.now(),
-            'hits': 0,
-        }
+            self._cache.popitem(last=False)
+        self._cache[self._key(message)] = {'result': result, 'time': datetime.now()}
 
-    def stats(self) -> Dict:
-        return {
-            'size': len(self._cache),
-            'total_hits': sum(v['hits'] for v in self._cache.values()),
-        }
+    def stats(self):
+        return {'size': len(self._cache)}
 
 
-# ═══════════════════════════════════════════════════════════════════
-# COMPACT AI PROMPT (small prompt = fast response)
-# ═══════════════════════════════════════════════════════════════════
+AI_PROMPT = """You are the routing brain of a Jyotish Oracle.
+Identify the QUESTION TYPE first, then route to the right systems.
 
-AI_PROMPT = """You are the brain of a Jyotish astrology system. Analyze the user message and return JSON.
+CRITICAL RULE: oracle_instruction must point to DATA only.
+WRONG: Tell them they will get married in 2026
+RIGHT: Read KP VERDICT field. State it directly. Check CONTRADICTION in synthesis.
 
-ONE QUESTION: Does this need birth chart calculations?
-If NO (greetings, thanks, emotions, clarifications, general chat) → needs_chart: false
-If YES (any life question, astrology topic, specific request) → needs_chart: true
+QUESTION TYPES:
 
-RETURN ONLY JSON:
+TYPE 1 - NATURE: What kind/type/suits me. No timing needed.
+Examples: What career suits me? What kind of person will I marry? What are my strengths?
+Systems: classical_rules + yogas + nadi_reading. NO dasha.
+oracle_instruction: Read NATURE indicators - 10th house lord, dominant planet, yogas. What KIND suits this chart. Do NOT give timing dates.
+
+TYPE 2 - TIMING: Will it happen / when will it happen.
+Examples: Will I get married? When will I get a job? Will I have children?
+Systems: classical_rules + dasha + kp_analysis + chara_dasha + yogini_dasha
+oracle_instruction: Read KP VERDICT first - state it directly. Give LIFE MAP from synthesis. Give pratyantar date as current window.
+
+TYPE 3 - EMOTIONAL: Feeling states, pain, confusion.
+Examples: I feel lost. I am depressed. Why do I feel alone. Hard time.
+Systems: dasha + classical_rules + remedies
+oracle_instruction: ONE line acknowledgment. Name planet causing this. Give exact date it ends. ONE specific remedy for this planet.
+
+TYPE 4 - SOUL/IDENTITY: Purpose, past life, nature, dharma.
+Examples: What is my purpose? Why was I born? What are my strengths?
+Systems: classical_rules + yogas + nadi_reading + navamsa
+oracle_instruction: Read Atmakaraka meaning. Read nakshatra depth. Read CONVERGENCE. Connect to soul purpose. No timing.
+
+TYPE 5 - BROAD LIFE: Future, big picture, what lies ahead.
+Examples: What does the future hold? What does this year look like? When will things improve?
+Systems: dasha + life_timeline + classical_rules + transits
+oracle_instruction: Give LIFE MAP across all periods. The 3 most important phases coming. Specific years not months.
+
+TYPE 6 - DAILY/PRACTICAL: Today, this week, should I do this now.
+Examples: Is today good? Should I sign today? What does this week look like?
+Systems: panchanga + weekly_forecast + prashna + dasha
+oracle_instruction: Read panchanga for today. Read prashna ruling planets. Give practical guidance.
+
+TYPE 7 - WORLD/MUNDANE: Countries, politics, global events.
+Examples: How does global situation affect me? Will India win? Is war coming?
+Systems: mundane_national + mundane_personal + dasha
+oracle_instruction: Read mundane planetary weather. Connect to this person natal houses. Make it personal.
+
+TYPE 8 - DELIVERY: Give me the specific thing already mentioned.
+Examples: Tell me the mantra. What is the gemstone. Give me the numbers.
+Systems: remedies + numerology. is_delivery: true
+oracle_instruction: Deliver the exact item from data. No preamble. No hook.
+
+AVAILABLE SYSTEMS (needs_chart: true unless noted):
+
+classical_rules - BPHS house analysis. Use for almost all questions.
+dasha - Vimshottari timing chain. Use for TIMING questions. NOT for nature questions.
+navamsa - D9 soul chart. Marriage nature, spouse description.
+transits - Current planets on natal houses. Use for what is happening now.
+yogas - Special combinations. Use for nature and identity questions.
+kp_analysis - KP YES/NO verdict. Use for timing and event questions.
+upapada - Marriage manifestation quality. Use with navamsa for marriage.
+remedies - Gemstones, mantras. Use when user is worried or asks what can I do.
+chakra - Energy centers. Use for spiritual/healing questions.
+numerology - Numbers. Use when asked for lucky numbers or name analysis.
+compatibility - Synastry. Use when user mentions a specific person.
+prashna - Horary chart NOW. Use for should I do this today questions.
+yogini_dasha - Cross-validates timing quality. Use for timing questions.
+chara_dasha - Independent timing check. Use for will it happen questions.
+varshaphal - Annual return. Use for this year questions.
+muhurta - Best timing. Use for when is best time to start questions.
+panchanga - Daily almanac. Use for is today good questions.
+weekly_forecast - 7-day forecast. Use for this week questions.
+life_timeline - 5-year forecast. Use for big picture questions.
+nadi_reading - Specific destiny predictions. Use for nature and identity questions.
+medical_astrology - ONLY when user explicitly mentions health or disease.
+mundane_national - One country chart. needs_chart: false.
+mundane_personal - World transits on user natal chart. needs_chart: true.
+mundane_compare - Two national charts. needs_chart: false.
+mundane_relocation - User planets in target country. needs_chart: true.
+
+SMART ROUTING EXAMPLES:
+What career suits me? -> TYPE 1. Systems: classical_rules + yogas + nadi_reading. NO dasha.
+When will I get a job? -> TYPE 2. Systems: dasha + kp_analysis + chara_dasha + classical_rules.
+What kind of person will I marry? -> TYPE 1. Systems: navamsa + upapada + classical_rules. NO dasha.
+Will I get married? -> TYPE 2. Systems: dasha + kp_analysis + chara_dasha + navamsa + classical_rules.
+I feel depressed -> TYPE 3. Systems: dasha + remedies.
+What is my purpose? -> TYPE 4. Systems: classical_rules + yogas + nadi_reading.
+What does this year look like? -> TYPE 5. Systems: dasha + life_timeline + transits.
+Is today good for signing? -> TYPE 6. Systems: prashna + panchanga.
+How does India situation affect me? -> TYPE 7. Systems: mundane_personal + dasha.
+Give me the mantra -> TYPE 8. is_delivery: true. Systems: remedies.
+
+OUTPUT - JSON ONLY, no explanation, no markdown:
 {
-"needs_chart": true,
-"houses": [7, 2],
-"topic": "marriage",
-"calculations": ["classical_rules", "dasha", "navamsa"],
-"oracle_instruction": "Answer marriage prospects honestly.",
-"max_words": 80,
-"language": "english",
-"translated": "english translation if not english",
-"emotion": "curious",
-"is_delivery": false
+  "needs_chart": true,
+  "question_type": "nature|timing|emotional|soul|broad_life|daily|world|delivery",
+  "calculations": ["system1", "system2"],
+  "topic": "single_word_topic",
+  "houses": [7, 2],
+  "oracle_instruction": "data-pointing only - WHERE to look not WHAT to say",
+  "max_words": 80,
+  "language": "english",
+  "translated": "english translation if not english",
+  "emotion": "curious|worried|anxious|hopeful|confused|sad|excited|neutral|desperate",
+  "is_delivery": false,
+  "mundane_country": "",
+  "mundane_country2": "",
+  "mundane_topic": "general"
 }
 
-HOUSES: 1=Self 2=Wealth/speech 3=Siblings 4=Mother/property/vehicles 5=Children/education 6=Enemies/legal/disease 7=Marriage/partner 8=Death/secrets/inheritance 9=Father/luck/travel 10=Career/government 11=Gains/friends 12=Foreign/loss/spirituality
-
-CALCULATIONS (pick only what is needed):
-classical_rules = Lord+planet analysis for the relevant houses
-dasha = Current dasha period
-navamsa = D9 soul chart (marriage/partner questions)
-transits = Current transits on relevant houses
-yogas = Relevant yogas
-upapada = Marriage-specific arudha
-longevity = 3-pair life span method
-numerology = Name/number analysis
-compatibility = Partner matching (needs partner data)
-remedies = Gemstone/mantra/ritual recommendations
-chakra = Energy center analysis
-
-is_delivery: true when user is asking for something SPECIFIC that was teased before (mantra text, lucky numbers, gemstone name). Oracle must GIVE the answer, not tease again.
-
-EXAMPLES:
-
-"will I get married?" → {"needs_chart":true,"houses":[7,2,12],"topic":"marriage","calculations":["classical_rules","dasha","navamsa","upapada"],"oracle_instruction":"Answer marriage prospects. Be honest about difficulties.","max_words":80,"language":"english","emotion":"curious","is_delivery":false}
-
-"will I win my court case?" → {"needs_chart":true,"houses":[6,7,1],"topic":"legal","calculations":["classical_rules","dasha","transits"],"oracle_instruction":"6th house = litigation. Check 6th lord strength vs 7th.","max_words":80,"language":"english","emotion":"worried","is_delivery":false}
-
-"how is my father?" → {"needs_chart":true,"houses":[9,4,8],"topic":"father","calculations":["classical_rules","dasha"],"oracle_instruction":"9th house = father. 4th from 9th shows his longevity.","max_words":80,"language":"english","emotion":"worried","is_delivery":false}
-
-"should I buy a car?" → {"needs_chart":true,"houses":[4,2,11],"topic":"vehicle","calculations":["classical_rules","dasha","transits"],"oracle_instruction":"4th house = vehicles. Check timing.","max_words":80,"language":"english","emotion":"curious","is_delivery":false}
-
-"tell me the mantra" → {"needs_chart":true,"houses":[],"topic":"mantra","calculations":["remedies"],"oracle_instruction":"DELIVER the actual mantra for their nakshatra. Give the Sanskrit text. Do NOT tease.","max_words":100,"language":"english","emotion":"curious","is_delivery":true}
-
-"what are my lucky numbers?" → {"needs_chart":true,"houses":[],"topic":"numerology","calculations":["numerology"],"oracle_instruction":"GIVE the actual lucky numbers. Do not tease.","max_words":60,"language":"english","emotion":"curious","is_delivery":true}
-
-"hello" → {"needs_chart":false,"houses":[],"topic":"greeting","calculations":[],"oracle_instruction":"Respond warmly in 1 line.","max_words":20,"language":"english","emotion":"neutral","is_delivery":false}
-
-"thanks" → {"needs_chart":false,"houses":[],"topic":"gratitude","calculations":[],"oracle_instruction":"Acknowledge warmly. Suggest what else to ask.","max_words":30,"language":"english","emotion":"neutral","is_delivery":false}
-
-"I feel sad today" → {"needs_chart":false,"houses":[],"topic":"emotional","calculations":[],"oracle_instruction":"Be empathetic. Then offer to look at their chart for this period.","max_words":50,"language":"english","emotion":"sad","is_delivery":false}
-
-"kab shaadi hogi?" → {"needs_chart":true,"houses":[7,2,12],"topic":"marriage","calculations":["classical_rules","dasha","navamsa"],"oracle_instruction":"Marriage timing. Be specific.","max_words":80,"language":"hindi","translated":"When will I get married?","emotion":"curious","is_delivery":false}
-
-"which gemstone should I wear?" → {"needs_chart":true,"houses":[1,9],"topic":"gemstone","calculations":["classical_rules","remedies"],"oracle_instruction":"GIVE specific gemstone based on lagna lord. Name, weight, finger, day to wear.","max_words":100,"language":"english","emotion":"curious","is_delivery":true}
-
-"what is a dasha?" → {"needs_chart":false,"houses":[],"topic":"education","calculations":[],"oracle_instruction":"Explain dasha in simple terms. Use analogy of seasons. Connect to their chart if data available.","max_words":80,"language":"english","emotion":"curious","is_delivery":false}
-
-"sex" → {"needs_chart":true,"houses":[7,12,8],"topic":"intimacy","calculations":["classical_rules","dasha","navamsa","chakra"],"oracle_instruction":"Answer about intimacy naturally. 7th=relationships, 12th=bed pleasures, 8th=sexual energy.","max_words":80,"language":"english","emotion":"curious","is_delivery":false}
-
-CONVERSATION HISTORY:
+CONVERSATION HISTORY (last 3 messages):
 {history}
 
-CLASSIFY THIS MESSAGE:"""
+USER MESSAGE:"""
 
-
-# ═══════════════════════════════════════════════════════════════════
-# METHOD MAPPING
-# ═══════════════════════════════════════════════════════════════════
-
-METHOD_MAP = {
-    # Simplified — classifier now tells us exactly what to calculate
-    # This is only used as fallback by _emergency_fallback
-    'marriage': {'default': ['get_classical_analysis:marriage', 'get_vimshottari_dasha', 'get_navamsa_analysis']},
-    'career': {'default': ['get_classical_analysis:career', 'get_vimshottari_dasha', 'get_yogas']},
-    'wealth': {'default': ['get_classical_analysis:wealth', 'get_vimshottari_dasha', 'get_yogas']},
-    'health': {'default': ['get_classical_analysis:health_issue', 'get_vimshottari_dasha']},
-    'children': {'default': ['get_classical_analysis:childbirth', 'get_vimshottari_dasha']},
-    'education': {'default': ['get_classical_analysis:education', 'get_vimshottari_dasha']},
-    'travel': {'default': ['get_classical_analysis:foreign', 'get_vimshottari_dasha']},
-    'property': {'default': ['get_classical_analysis:property', 'get_vimshottari_dasha']},
-    'legal': {'default': ['get_classical_analysis:career', 'get_vimshottari_dasha']},
-    'love': {'default': ['get_classical_analysis:love', 'get_vimshottari_dasha', 'get_navamsa_analysis']},
-    'spiritual': {'default': ['get_classical_analysis:spiritual', 'get_vimshottari_dasha']},
-    'business': {'default': ['get_classical_analysis:business', 'get_vimshottari_dasha']},
-    'general': {'default': ['get_vimshottari_dasha', 'get_personality']},
-    'remedies': {'default': ['get_remedies', 'get_dynamic_remedies', 'get_gemstone_recommendations']},
-    'gemstone': {'default': ['get_gemstone_recommendations']},
-    'mantra': {'default': ['get_dynamic_mantra']},
-    'numerology': {'default': ['get_numerology', 'get_lucky_numbers']},
-    'compatibility': {'default': ['get_synastry']},
-    'daily': {'default': ['get_realtime_dashboard']},
-    'dasha': {'default': ['get_vimshottari_dasha', 'get_pratyantar_dasha']},
-    'yogas': {'default': ['get_yogas', 'get_yoga_timing']},
-    'transit': {'default': ['get_transit_deep', 'get_future_transits']},
-    'longevity': {'default': ['get_classical_analysis:health_issue', 'get_vimshottari_dasha']},
+CALC_TO_METHOD = {
+    'classical_rules':    'get_classical_analysis',
+    'dasha':              'get_vimshottari_dasha',
+    'navamsa':            'get_navamsa_analysis',
+    'transits':           'get_transit_deep',
+    'yogas':              'get_yogas',
+    'upapada':            'get_classical_analysis',
+    'longevity':          'get_classical_analysis',
+    'kp_analysis':        'kp_event_analysis',
+    'numerology':         'get_numerology',
+    'compatibility':      'get_synastry',
+    'remedies':           'get_remedies',
+    'chakra':             'get_chakra_analysis',
+    'prashna':            'cast_prashna',
+    'yogini_dasha':       'get_yogini_dasha',
+    'chara_dasha':        'get_chara_dasha_analysis',
+    'varshaphal':         'get_varshaphal',
+    'muhurta':            'get_muhurta',
+    'panchanga':          'get_panchanga',
+    'weekly_forecast':    'get_weekly_forecast',
+    'life_timeline':      'get_life_timeline',
+    'nadi_reading':       'get_nadi_reading',
+    'medical_astrology':  'get_medical_report',
+    'mundane_national':   'get_mundane_national',
+    'mundane_compare':    'get_mundane_compare',
+    'mundane_personal':   'get_mundane_personal',
+    'mundane_cycles':     'get_mundane_cycles',
+    'mundane_eclipse':    'get_mundane_eclipse',
+    'mundane_relocation': 'get_mundane_relocation',
+    'mundane_ingress':    'get_mundane_ingress',
 }
 
-WHOM_EXTRA = {
-    'father': ['get_medical_report'], 'mother': ['get_vastu'],
-    'spouse': ['get_navamsa_analysis'], 'child': ['get_varga_analysis'],
-    'partner': ['get_navamsa_analysis', 'get_career_aptitude'],
+EVENT_MAP = {
+    'marriage':'marriage', 'love':'love', 'career':'career',
+    'wealth':'wealth', 'health':'health_issue', 'longevity':'longevity',
+    'children':'childbirth', 'education':'education', 'travel':'foreign',
+    'property':'property', 'legal':'legal', 'spiritual':'spiritual',
+    'business':'business', 'vehicle':'property', 'promotion':'career',
+    'foreign':'foreign', 'relationship':'love', 'job':'career',
+    'money':'wealth', 'finance':'wealth', 'pregnancy':'childbirth',
 }
 
-EMOTION_TONE = {
-    'worried': 'caring', 'anxious': 'reassuring', 'curious': 'warm',
-    'excited': 'warm', 'confused': 'empathetic', 'sad': 'caring',
-    'hopeful': 'encouraging', 'neutral': 'warm', 'desperate': 'caring',
-    'scared': 'reassuring',
-}
-
-
-# ═══════════════════════════════════════════════════════════════════
-# MINIMAL KEYWORD FALLBACK (only when AI is completely dead)
-# ═══════════════════════════════════════════════════════════════════
-
-EMERGENCY_KEYWORDS = {
-    'marriage': ['marriage', 'married', 'shaadi', 'wedding', 'spouse', 'husband', 'wife'],
-    'career': ['career', 'job', 'naukri', 'promotion', 'salary', 'work'],
-    'wealth': ['wealth', 'money', 'rich', 'financial', 'income'],
-    'health': ['health', 'disease', 'hospital', 'doctor', 'sick'],
-    'children': ['child', 'baby', 'pregnant', 'conceive', 'fertility'],
-    'education': ['education', 'exam', 'study', 'college', 'university'],
-    'travel': ['foreign', 'abroad', 'visa', 'immigration'],
-    'property': ['property', 'house', 'flat', 'land', 'vehicle', 'car'],
-    'love': ['love', 'boyfriend', 'girlfriend', 'breakup', 'relationship'],
-    'spiritual': ['spiritual', 'moksha', 'meditation', 'karma'],
-    'business': ['business', 'startup', 'entrepreneur'],
-    'remedies': ['remedy', 'upay', 'solution'],
-    'gemstone': ['gemstone', 'stone', 'ruby', 'diamond', 'emerald'],
-    'mantra': ['mantra', 'chant', 'jaap'],
-    'personality': ['about me', 'personality', 'who am i', 'my nature'],
-    'overview': ['kundli', 'horoscope', 'chart', 'reading'],
-    'yogas': ['yoga', 'yog', 'raja yoga'],
-    'dasha': ['dasha', 'mahadasha', 'antardasha'],
-    'transit': ['sade sati', 'shani', 'saturn'],
-    'compatibility': ['compatibility', 'matching', 'gun milan'],
-    'muhurta': ['muhurat', 'auspicious', 'shubh'],
-    'names': ['baby name', 'naam', 'naamkaran'],
-    'numerology': ['numerology', 'lucky number'],
-    'vastu': ['vastu', 'direction'],
-    'location': ['which city', 'move to', 'relocat'],
-    'daily': ['today', 'aaj', 'right now'],
-    'weekly': ['this week', 'weekly'],
-    'longevity': ['death', 'lifespan'],
-    'general': ['hello', 'hi', 'hey', 'namaste'],
+TONE_MAP = {
+    'worried':'empathetic', 'anxious':'reassuring', 'sad':'caring',
+    'curious':'warm', 'excited':'encouraging', 'confused':'precise',
+    'hopeful':'encouraging', 'neutral':'warm', 'desperate':'empathetic',
+    'frustrated':'direct', 'angry':'calm', 'happy':'warm',
 }
 
 
 class IntentClassifier:
-    """Pure AI classifier with smart caching. Works in any language."""
-
     def __init__(self):
         self._cache = ClassificationCache()
-        self._ai_failures = 0
-        self._max_failures = 10
 
-    def classify(self, message: str, conversation_history: List[str] = None) -> Dict:
-        """
-        Classify any message in any language.
-        1. Check cache (0ms)
-        2. Call AI (2-3s)
-        3. Emergency keyword fallback (50ms)
-        """
-        # Step 1: Cache check
+    def classify(self, message: str, history: List[str] = None) -> Dict:
         cached = self._cache.get(message)
         if cached:
             return cached
-
-        # Step 2: AI classification
-        if self._ai_failures < self._max_failures:
-            try:
-                result = self._call_ai(message, conversation_history)
-                if result:
-                    self._ai_failures = 0
-                    self._cache.put(message, result)
-                    return result
-            except Exception:
-                self._ai_failures += 1
-
-        # Step 3: Emergency fallback
-        result = self._emergency_fallback(message)
+        result = self._call_ai(message, history) or self._fallback(message)
+        self._cache.put(message, result)
         return result
 
-    async def classify_async(self, message: str, conversation_history: List[str] = None) -> Dict:
-        """Async version."""
+    async def classify_async(self, message: str, history: List[str] = None) -> Dict:
         cached = self._cache.get(message)
         if cached:
             return cached
+        result = (await self._call_ai_async(message, history)
+                  or self._fallback(message))
+        self._cache.put(message, result)
+        return result
 
-        if self._ai_failures < self._max_failures:
-            try:
-                result = await self._call_ai_async(message, conversation_history)
-                if result:
-                    self._ai_failures = 0
-                    self._cache.put(message, result)
-                    return result
-            except Exception:
-                self._ai_failures += 1
+    def _prompt(self, history: List[str] = None) -> str:
+        h = ' | '.join((history or [])[-3:])
+        return AI_PROMPT.replace('{history}', h or 'none')
 
-        return self._emergency_fallback(message)
-
-    # ═══════════════════════════════════════════════════════════════
-    # AI CLASSIFICATION
-    # ═══════════════════════════════════════════════════════════════
+    def _user_content(self, message: str, history: List[str] = None) -> str:
+        if history:
+            return "Previous: " + " | ".join(history[-3:]) + f"\nNow: {message}"
+        return message
 
     def _call_ai(self, message: str, history: List[str] = None) -> Optional[Dict]:
-        """Call AI for classification."""
-        user_content = message
-        if history and len(history) > 0:
-            ctx = "Previous: " + " | ".join(history[-3:])
-            user_content = f"{ctx}\nNow: {message}"
-
         try:
-            response = httpx.post(
+            r = httpx.post(
                 'https://openrouter.ai/api/v1/chat/completions',
                 headers={
                     'Authorization': f'Bearer {settings.OPENROUTER_API_KEY}',
@@ -309,43 +252,26 @@ class IntentClassifier:
                 },
                 json={
                     'model': 'deepseek/deepseek-chat',
-                    'max_tokens': 300,
+                    'max_tokens': 400,
                     'temperature': 0,
                     'messages': [
-                        {'role': 'system', 'content': AI_PROMPT},
-                        {'role': 'user', 'content': user_content},
+                        {'role': 'system', 'content': self._prompt(history)},
+                        {'role': 'user', 'content': self._user_content(message, history)},
                     ],
                 },
                 timeout=10.0,
             )
-
-            if response.status_code != 200:
-                return None
-
-            content = response.json()['choices'][0]['message']['content']
-            content = content.strip()
-            if content.startswith('```'):
-                content = '\n'.join(content.split('\n')[1:])
-            if content.endswith('```'):
-                content = '\n'.join(content.split('\n')[:-1])
-            content = content.replace('```json', '').replace('```', '').strip()
-
-            ai = json.loads(content)
-            return self._build_result(ai, message)
-
+            if r.status_code == 200:
+                raw = r.json()['choices'][0]['message']['content'].strip()
+                return self._parse(raw, message)
         except Exception:
-            return None
+            pass
+        return None
 
     async def _call_ai_async(self, message: str, history: List[str] = None) -> Optional[Dict]:
-        """Async AI call."""
-        user_content = message
-        if history and len(history) > 0:
-            ctx = "Previous: " + " | ".join(history[-3:])
-            user_content = f"{ctx}\nNow: {message}"
-
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(
+                r = await client.post(
                     'https://openrouter.ai/api/v1/chat/completions',
                     headers={
                         'Authorization': f'Bearer {settings.OPENROUTER_API_KEY}',
@@ -353,189 +279,125 @@ class IntentClassifier:
                     },
                     json={
                         'model': 'deepseek/deepseek-chat',
-                        'max_tokens': 300,
+                        'max_tokens': 400,
                         'temperature': 0,
                         'messages': [
-                            {'role': 'system', 'content': AI_PROMPT},
-                            {'role': 'user', 'content': user_content},
+                            {'role': 'system', 'content': self._prompt(history)},
+                            {'role': 'user', 'content': self._user_content(message, history)},
                         ],
                     },
                     timeout=10.0,
                 )
+                if r.status_code == 200:
+                    raw = r.json()['choices'][0]['message']['content'].strip()
+                    return self._parse(raw, message)
+        except Exception:
+            pass
+        return None
 
-                if response.status_code != 200:
-                    return None
-
-                content = response.json()['choices'][0]['message']['content']
-                content = content.strip()
-                if content.startswith('```'):
-                    content = '\n'.join(content.split('\n')[1:])
-                if content.endswith('```'):
-                    content = '\n'.join(content.split('\n')[:-1])
-                content = content.replace('```json', '').replace('```', '').strip()
-
-                ai = json.loads(content)
-                return self._build_result(ai, message)
-
+    def _parse(self, raw: str, message: str) -> Optional[Dict]:
+        try:
+            clean = re.sub(r'^```json\s*|^```\s*|```$', '', raw, flags=re.MULTILINE).strip()
+            return self._shape(json.loads(clean), message)
         except Exception:
             return None
 
-    def _build_result(self, ai: Dict, original: str) -> Dict:
-        """Build result from new smart classifier JSON."""
-        needs_chart = ai.get('needs_chart', True)
-        houses = ai.get('houses', [])
-        topic = ai.get('topic', 'general')
-        calculations = ai.get('calculations', [])
-        oracle_instruction = ai.get('oracle_instruction', '')
-        max_words = ai.get('max_words', 80)
-        language = ai.get('language', 'english')
-        translated = ai.get('translated', original)
-        emotion = ai.get('emotion', 'neutral')
-        is_delivery = ai.get('is_delivery', False)
-
-        # Build methods from calculations list
-        methods = []
-        calc_to_method = {
-            'classical_rules': 'get_classical_analysis',
-            'dasha': 'get_vimshottari_dasha',
-            'navamsa': 'get_navamsa_analysis',
-            'transits': 'get_transit_deep',
-            'yogas': 'get_yogas',
-            'upapada': 'get_classical_analysis',
-            'longevity': 'get_classical_analysis',
-            'numerology': 'get_numerology',
-            'compatibility': 'get_synastry',
-            'remedies': 'get_remedies',
-            'chakra': 'get_chakra_analysis',
-        }
-        
-        for calc in calculations:
-            method = calc_to_method.get(calc, '')
-            if method and method not in methods:
-                # For classical_rules, append the topic
-                if calc == 'classical_rules' and topic:
-                    event_map = {
-                        'marriage': 'marriage', 'career': 'career', 'wealth': 'wealth',
-                        'health': 'health_issue', 'children': 'childbirth', 'education': 'education',
-                        'travel': 'foreign', 'property': 'property', 'legal': 'career',
-                        'love': 'love', 'spiritual': 'spiritual', 'business': 'business',
-                        'father': 'health_issue', 'mother': 'health_issue', 'vehicle': 'property',
-                        'intimacy': 'love', 'longevity': 'longevity',
-                    }
-                    event = event_map.get(topic, topic)
-                    methods.append(f'get_classical_analysis:{event}')
-                else:
-                    methods.append(method)
-
-        # Map topic to primary_intent for backward compatibility
-        intent = topic
-        if intent not in METHOD_MAP:
-            intent = 'general'
-
-        is_worried = emotion in ('worried', 'anxious', 'sad', 'desperate', 'scared')
-        tone_map = {
-            'worried': 'empathetic', 'anxious': 'reassuring', 'curious': 'warm',
-            'excited': 'encouraging', 'confused': 'precise', 'sad': 'caring',
-            'hopeful': 'encouraging', 'neutral': 'warm', 'desperate': 'empathetic',
-            'scared': 'reassuring',
-        }
-        tone = tone_map.get(emotion, 'warm')
-
-        return {
-            'primary_intent': intent,
-            'needs_chart': needs_chart,
-            'relevant_houses': houses,
-            'calculations': calculations,
-            'oracle_instruction': oracle_instruction,
-            'max_words': max_words,
-            'is_delivery': is_delivery,
-            'confidence': 0.95,
-            'methods': methods[:8],
-            'response_type': topic,
-            'emotional_tone': tone,
-            'tone': tone,
-            'entities': {},
-            'time_context': None,
-            'is_worried': is_worried,
-            'emotion': emotion,
-            'about_whom': 'self',
-            'question_type': 'default',
-            'language': language,
-            'translated': translated,
-            'original_message': original,
-            'classifier': 'ai_v2',
-            'response_style': {
-                'tone': tone,
-                'special_instruction': oracle_instruction,
-            },
-            'follow_up_suggestions': [],
-            'cache_hit': False,
-        }
-
-    # ═══════════════════════════════════════════════════════════════
-    # EMERGENCY FALLBACK (only when AI is completely dead)
-    # ═══════════════════════════════════════════════════════════════
-
-    def _emergency_fallback(self, message: str) -> Dict:
-        """Last resort. Simple keyword match."""
-        msg = message.lower()
-        best = 'general'
-        best_score = 0
-
-        for cat, keywords in EMERGENCY_KEYWORDS.items():
-            score = sum(1 for kw in keywords if kw in msg)
-            if score > best_score:
-                best = cat
-                best_score = score
-
-        intent_methods = METHOD_MAP.get(best, METHOD_MAP['general'])
-        methods = list(intent_methods.get('default', []))
-
-        worry_words = ['worried', 'tension', 'problem', 'scared', 'help']
-        is_worried = any(w in msg for w in worry_words)
-        if is_worried and 'get_remedies' not in methods:
-            methods.append('get_remedies')
-
-        return {
-            'primary_intent': best,
-            'secondary_intents': [],
-            'confidence': 0.50,
-            'methods': methods,
-            'method_reasons': {},
-            'response_type': best,
-            'emotional_tone': 'caring' if is_worried else 'warm',
-            'entities': {},
-            'time_context': None,
-            'is_worried': is_worried,
-            'emotion': 'worried' if is_worried else 'neutral',
-            'about_whom': 'self',
-            'question_type': 'default',
-            'relevant_houses': [],
-            'language': 'unknown',
+    def _fallback(self, message: str) -> Dict:
+        return self._shape({
+            'needs_chart': True,
+            'calculations': ['dasha', 'classical_rules'],
+            'topic': 'general',
+            'houses': [1],
+            'oracle_instruction': (
+                'Read current Mahadasha and Antardasha lords from dasha data. '
+                'Read general chart strength from classical_rules. '
+                'Report what the data shows - do not invent specifics.'
+            ),
+            'max_words': 80,
+            'language': 'english',
             'translated': message,
-            'understanding': '',
-            'original_message': message,
-            'classifier': 'emergency_fallback',
-            'response_style': {'tone': 'warm', 'length': 'medium', 'should_include_remedy': is_worried, 'special_instruction': ''},
-            'follow_up_suggestions': [],
-            'cache_hit': False,
-        }
+            'emotion': 'neutral',
+            'is_delivery': False,
+            'mundane_country': '',
+            'mundane_country2': '',
+            'mundane_topic': 'general',
+        }, message)
 
-    def get_stats(self) -> Dict:
+    def _shape(self, ai: Dict, original: str) -> Dict:
+        emotion = ai.get('emotion', 'neutral')
+        tone = TONE_MAP.get(emotion, 'warm')
+        topic = ai.get('topic', 'general')
+        calculations = ai.get('calculations', ['dasha'])
+
+        methods = []
+        for calc in calculations:
+            method = CALC_TO_METHOD.get(calc)
+            if not method or method in methods:
+                continue
+            if calc == 'classical_rules':
+                event = EVENT_MAP.get(topic, 'general')
+                methods.append(f'get_classical_analysis:{event}')
+            elif calc == 'kp_analysis':
+                event = EVENT_MAP.get(topic, topic)
+                methods.append(f'kp_event_analysis:{event}')
+            elif calc == 'prashna':
+                methods.append(f'cast_prashna:{topic}')
+            elif calc == 'chara_dasha':
+                methods.append('get_chara_dasha_analysis')
+            else:
+                methods.append(method)
+
+        oracle_instruction = ai.get('oracle_instruction', '')
+        question_type = ai.get('question_type', 'timing')
+        if not oracle_instruction or len(oracle_instruction) < 20:
+            oracle_instruction = (
+                f'Read {topic} indicators from the data. '
+                f'Report what the data shows - strength, challenge, or timing. '
+                f'Do not state outcomes not present in the data.'
+            )
+
         return {
-            'cache': self._cache.stats(),
-            'ai_failures': self._ai_failures,
+            'primary_intent':     topic,
+            'question_type':     ai.get('question_type', 'timing'),
+            'needs_chart':        ai.get('needs_chart', True),
+            'relevant_houses':    ai.get('houses', []),
+            'calculations':       calculations,
+            'methods':            methods[:10],
+            'oracle_instruction': oracle_instruction,
+            'max_words':          min(ai.get('max_words', 80), 150),
+            'is_delivery':        ai.get('is_delivery', False),
+            'language':           ai.get('language', 'english'),
+            'translated':         ai.get('translated', original),
+            'emotion':            emotion,
+            'emotional_tone':     tone,
+            'tone':               tone,
+            'is_worried':         emotion in ('worried', 'anxious', 'sad', 'desperate'),
+            'about_whom':         'self',
+            'entities':           {},
+            'time_context':       None,
+            'mundane_country':    ai.get('mundane_country', ''),
+            'mundane_country2':   ai.get('mundane_country2', ''),
+            'mundane_topic':      ai.get('mundane_topic', 'general'),
+            'original_message':   original,
+            'classifier':         'ai_v4',
+            'cache_hit':          False,
+            'response_style':     {'tone': tone},
         }
 
+    def get_stats(self):
+        return {'cache': self._cache.stats()}
 
-# Singleton
+
 _classifier = IntentClassifier()
+
 
 def classify_intent(message: str, history: List[str] = None) -> Dict:
     return _classifier.classify(message, history)
 
+
 async def classify_intent_async(message: str, history: List[str] = None) -> Dict:
     return await _classifier.classify_async(message, history)
+
 
 def get_classifier_stats() -> Dict:
     return _classifier.get_stats()

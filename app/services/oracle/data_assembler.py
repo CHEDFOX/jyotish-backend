@@ -7,6 +7,17 @@ Catches errors gracefully. Compresses to ~500 words.
 from typing import Dict, List
 from datetime import datetime
 
+import logging, traceback
+_log = logging.getLogger('jyotish.assembler')
+if not _log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter('%(asctime)s [ASSEMBLER] %(levelname)s %(message)s'))
+    _log.addHandler(_h)
+    _log.setLevel(logging.WARNING)
+def _log_failure(m, e):
+    _log.warning('CALC FAILED: %s | %s: %s', m, type(e).__name__, e)
+
+
 
 class DataAssembler:
     def __init__(self, engine):
@@ -64,8 +75,8 @@ class DataAssembler:
                 dasha_interp = get_current_dasha_interpretation(self.engine)
                 if dasha_interp and 'error' not in dasha_interp:
                     raw_data['dasha_interpretation'] = dasha_interp
-            except Exception:
-                pass
+            except Exception as _e:
+                _log_failure("block", _e)
 
             # TIME-SPECIFIC calculations
             # Extract year and month from oracle_instruction or original message
@@ -884,6 +895,23 @@ class DataAssembler:
         return None
 
     def _build_briefing(self, intent, sections, intent_data):
+        # Run synthesis engine first
+        synthesis_text = ''
+        dasha_enrichment = {}
+        self._synthesis_kp_verdict = ''
+        self._synthesis_kp_rp = ''
+        try:
+            from .synthesis_engine import synthesize as run_synthesis
+            raw_data = {s.get('source',''): s.get('data','') for s in sections}
+            syn = run_synthesis(self.engine, intent, raw_data, intent_data)
+            synthesis_text = syn.get('synthesis_text','')
+            dasha_enrichment = syn.get('dasha_enrichment',{})
+            chain = syn.get('timing_chain',{}).get('chain',{})
+            self._synthesis_kp_verdict = chain.get('kp_verdict','')
+            self._synthesis_kp_rp = chain.get('kp_rp_verdict','')
+        except Exception as _e:
+            _log_failure('synthesis_engine', _e)
+
         # Build clean brief matching the example format in the persona
         supports = []
         opposes = []
@@ -983,9 +1011,9 @@ class DataAssembler:
             antar = dasha_data.get('antardasha', {})
             from datetime import datetime as dt_class
             current_d = self.engine.get_dasha_for_date(dt_class.now())
-            facts.append('DASHA DATES: Mahadasha ' + str(maha.get('lord', '')) + ' ends ' + str(maha.get('end', ''))[:10] + '. Antardasha ' + str(antar.get('lord', '')) + ' ends ' + str(antar.get('end', ''))[:10] + '. Current: ' + str(current_d.get('dasha_string', '')))
-        except Exception:
-            pass
+            facts.append('CURRENT LIFE CHAPTER: ' + str(maha.get('lord', '')) + ' energy (runs until ' + str(maha.get('end', ''))[:10] + '). Current sub-energy: ' + str(antar.get('lord', '')) + '.')
+        except Exception as _e:
+            _log_failure("block", _e)
 
         # Always add planet positions for accuracy
         try:
@@ -998,16 +1026,16 @@ class DataAssembler:
                 combust = ' (COMBUST)' if planet.get('combust', False) else ''
                 placements.append(f'{p}:H{h}-{r}{retro}{combust}')
             facts.append('PLANET POSITIONS: ' + ', '.join(placements))
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         # Add nakshatra data
         try:
             nak = self.engine.get_nakshatra_profile()
             moon_nak = nak.get('moon_profile', {})
             facts.append('NAKSHATRA: Moon in ' + str(moon_nak.get('nakshatra', '')) + ' Pada ' + str(moon_nak.get('pada', '')) + ', Ruler: ' + str(moon_nak.get('ruler', '')) + ', Deity: ' + str(moon_nak.get('deity', '')) + ', Symbol: ' + str(moon_nak.get('symbol', '')))
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         # DIRECT injection of year outlook and varshaphal from sections
         for section in sections:
@@ -1039,8 +1067,8 @@ class DataAssembler:
                 facts.append('VARGOTTAMA PLANETS: ' + ', '.join(vargo) + ' (same sign in birth and navamsa chart)')
             else:
                 facts.append('VARGOTTAMA: None')
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
         # Inject definitive data
         for dk, dv in definitive_data.items():
             if isinstance(dv, str) and dv:
@@ -1084,8 +1112,8 @@ class DataAssembler:
                     elif 'Throat' in p: facts.append('Communication energy blocked')
                     elif 'Solar' in p: facts.append('Confidence center blocked')
                     else: facts.append(p + ' energy center blocked')
-            except Exception:
-                pass
+            except Exception as _e:
+                _log_failure("block", _e)
 
         if upapada_info and intent in ('marriage', 'love'):
             if 'Ketu' in upapada_info:
@@ -1100,8 +1128,8 @@ class DataAssembler:
                 period = dasha_info.split('Current period:')[1].split('.')[0].strip()
                 theme = dasha_info.split('theme:')[1].split('.')[0].strip()
                 facts.append('Current period: ' + period + ' — ' + theme)
-            except Exception:
-                pass
+            except Exception as _e:
+                _log_failure("block", _e)
 
         mood_line = ''
         try:
@@ -1109,8 +1137,8 @@ class DataAssembler:
             psych = get_psychological_state(self.engine)
             if psych and 'error' not in psych:
                 mood_line = psych.get('current_mood', '').split(':')[-1].strip()
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         # Mantra data
         mantra_data = ''
@@ -1151,8 +1179,8 @@ class DataAssembler:
                     count = md.get('count', 108)
                     if pm:
                         facts.append(f'Mantra: {pm} (for {pp}, {reason}). Chant {count} times')
-            except Exception:
-                pass
+            except Exception as _e:
+                _log_failure("block", _e)
 
         if lucky_data:
             try:
@@ -1168,8 +1196,8 @@ class DataAssembler:
                     avoid = ld.get('avoid_numbers', [])
                     if lucky_digits:
                         facts.append(f'Lucky numbers: {lucky_digits}. Birth number: {mulank}. Destiny number: {bhagyank}. Avoid: {avoid}')
-            except Exception:
-                pass
+            except Exception as _e:
+                _log_failure("block", _e)
 
         if gemstone_data:
             try:
@@ -1186,8 +1214,8 @@ class DataAssembler:
                     if recs:
                         g = recs[0]
                         facts.append(f"Primary gemstone: {g.get('gemstone', '')} for {g.get('planet', '')}. Wear on {g.get('finger', '')} on {g.get('day_to_wear', '')}. Weight: {g.get('weight', '')}. Metal: {g.get('metal', '')}")
-            except Exception:
-                pass
+            except Exception as _e:
+                _log_failure("block", _e)
 
         # Add time-specific data to facts — INSERT AT TOP so LLM sees them first
         if transit_info:
@@ -1200,7 +1228,28 @@ class DataAssembler:
         hook = self._suggest_hook(intent, chakra_info, navamsa_info, supports)
 
         worried = intent_data.get('is_worried', False)
-        user_mood = 'Worried, needs empathy first' if worried else (mood_line if mood_line else 'Curious, be direct')
+        # Emotion from classifier always wins — dasha psychology is secondary context only
+        emotion = intent_data.get('emotion', 'neutral') if intent_data else 'neutral'
+        emotion_moods = {
+            'worried':   'Worried — lead with empathy, then reading, then remedy',
+            'anxious':   'Anxious — one clear direction, no overwhelm',
+            'sad':       'Sad — acknowledge the feeling first, reading second',
+            'desperate': 'Desperate — immediate warmth and one practical step now',
+            'hopeful':   'Hopeful — be encouraging, give specific timing',
+            'curious':   'Curious — be direct and insightful, skip preamble',
+            'confused':  'Confused — be precise and grounding, cut through fog',
+            'excited':   'Excited — match energy, be warm and specific',
+            'neutral':   'Neutral — be warm and direct',
+        }
+        if worried:
+            user_mood = 'Worried — lead with empathy, then reading, then remedy'
+        else:
+            base_mood = emotion_moods.get(emotion, 'Curious — be direct and insightful')
+            # Add dasha context as a note, not as the primary mood
+            if mood_line:
+                user_mood = base_mood + f'. Dasha context: {mood_line}'
+            else:
+                user_mood = base_mood
 
         # Add delivery data to facts if present
         if delivery_data.get('mantra'):
@@ -1271,8 +1320,8 @@ class DataAssembler:
                     avastha_lines.append(pname + ': ' + ', '.join(notable))
             if avastha_lines:
                 facts.append('PLANET STATES: ' + '. '.join(avastha_lines[:5]))
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         try:
             # 2. Vimshopaka — definitive planet strength ranking
@@ -1282,8 +1331,8 @@ class DataAssembler:
                 strongest = ranked[0]
                 weakest = ranked[-1]
                 facts.append('PLANET STRENGTH RANKING: Strongest=' + strongest['planet'] + ' (' + str(strongest['vimshopaka']) + '/20), Weakest=' + weakest['planet'] + ' (' + str(weakest['vimshopaka']) + '/20)')
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         try:
             # 3. Dasha Sandhi — critical for timing
@@ -1291,8 +1340,8 @@ class DataAssembler:
             if sandhi.get('in_sandhi'):
                 for sd in sandhi.get('sandhi_details', []):
                     facts.insert(0, 'WARNING - DASHA SANDHI: ' + sd.get('description', '') + '. ' + sd.get('advice', ''))
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         try:
             # 4. Graha Yuddha — if any planets at war
@@ -1300,16 +1349,16 @@ class DataAssembler:
             if yuddha.get('has_war'):
                 for war in yuddha.get('wars', []):
                     facts.append('PLANETARY WAR: ' + war['planet1'] + ' vs ' + war['planet2'] + ' — ' + war['winner'] + ' wins, ' + war['loser'] + ' weakened')
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         try:
             # 5. Maraka — for health/longevity questions
             if intent in ('health', 'health_issue', 'longevity', 'death'):
                 maraka = self.engine.get_maraka()
                 facts.append('MARAKA PLANETS: ' + ', '.join(maraka.get('maraka_planets', [])) + '. Badhaka: ' + str(maraka.get('badhaka_lord', '')))
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         try:
             # 6. Nabhasa Yogas — for personality/life pattern questions
@@ -1318,8 +1367,8 @@ class DataAssembler:
                 for y in nabhasa.get('yogas', [])[:2]:
                     if y.get('name') != 'Samanya':
                         facts.append('PATTERN: ' + y['name'] + ' yoga — ' + y['description'])
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         try:
             # 7. Sannyasa — for spiritual questions
@@ -1327,8 +1376,8 @@ class DataAssembler:
                 sann = self.engine.get_sannyasa_yogas()
                 for y in sann.get('yogas', [])[:2]:
                     facts.append('SPIRITUAL: ' + y['name'] + ' — ' + y['description'])
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
         try:
             # 8. Rashi Drishti — sign aspects for key planets
@@ -1340,13 +1389,30 @@ class DataAssembler:
                 if asp_planets:
                     names = [a['planet'] for a in asp_planets[:3]]
                     facts.append(pname + ' rashi-aspects: ' + ', '.join(names))
-        except Exception:
-            pass
+        except Exception as _e:
+            _log_failure("block", _e)
 
 
         brief = 'DATA:\n'
+        # KP verdict at top of facts
+        if self._synthesis_kp_verdict:
+            kp_line = 'KP VERDICT: ' + self._synthesis_kp_verdict
+            if self._synthesis_kp_rp:
+                kp_line += ' | RP: ' + self._synthesis_kp_rp
+            facts.insert(0, kp_line)
+
+        # Yogini and Narayana enrichment
+        y_reading = dasha_enrichment.get('yogini',{}).get('reading','')
+        if y_reading: facts.append(y_reading)
+        n_reading = dasha_enrichment.get('narayana',{}).get('reading','')
+        if n_reading: facts.append(n_reading)
+        a_reading = dasha_enrichment.get('ashtottari',{}).get('reading','')
+        if a_reading: facts.append(a_reading)
+
         brief += 'TOPIC: ' + intent.upper() + '\n'
         brief += 'VERDICT: ' + verdict + '\n'
+        if synthesis_text:
+            brief += synthesis_text + '\n'
         brief += 'KEY FACTS: ' + '. '.join(facts) + '.\n'
         brief += 'USER MOOD: ' + user_mood + '\n'
         if hook:
@@ -1365,11 +1431,11 @@ class DataAssembler:
                     'topic': intent,
                 }
                 response_text = write_full_response(intent, briefing_data)
-                brief += '\nRESPONSE (output this EXACTLY, then add hook):\n' + response_text
+                # Removed: hardcoded response bypassed synthesis observations
                 brief += '\n\nKEY FACTS FOR HOOK: ' + '. '.join(facts[:4])
                 brief += '\nHOOK DIRECTION: ' + hook
-            except Exception:
-                pass
+            except Exception as _e:
+                _log_failure("block", _e)
 
         return brief
 
