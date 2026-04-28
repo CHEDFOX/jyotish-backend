@@ -62,6 +62,10 @@ def get_client_ip(request: Request) -> str:
 
 
 def check_rate_limit(request: Request, endpoint: str, limit: int):
+    # Bypass for localhost (development/testing)
+    client_host = request.client.host if request.client else ""
+    if client_host in ("127.0.0.1", "localhost", "::1"):
+        return
     ip = get_client_ip(request)
     key = f"{endpoint}:{ip}"
 

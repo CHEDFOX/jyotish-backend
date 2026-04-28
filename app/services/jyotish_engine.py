@@ -58,7 +58,15 @@ from .kp.kp_horary import KPHorary
 from .parashara.shadbala_complete import ShadbalaComplete
 from .parashara.retrograde_natal import RetrogradeNatal
 from .parashara.pushkara import PushkaraAnalysis
+from .parashara.combustion import analyze_combustion
+from .parashara.gandanta import analyze_gandanta
 from .transits.eclipse_calendar import EclipseCalendar
+from .predictions.transit_calendar import TransitCalendar
+from .tajika.tithi_pravesh import TithiPravesh
+from .muhurta.hora_notifications import get_current_hora, generate_notification, get_next_favorable_hora
+from .prashna.prashna_refined import PrashnaRefined
+from .compatibility.composite import CompositeChart
+from .transits.vedha import check_vedha, format_for_oracle as fmt_vedha
 
 # Parashara imports
 from .parashara.dignity import PlanetaryDignity
@@ -815,6 +823,69 @@ class JyotishEngine:
             'transits': self.get_current_transits()['overall_period'],
             'sade_sati': self.check_sade_sati()['is_sade_sati'],
         }
+
+    def get_hora_notification(self) -> Dict:
+        """Get personalized notification based on current hora + chart."""
+        self._ensure_chart()
+        return generate_notification(self)
+
+    def get_current_hora_info(self) -> Dict:
+        """What planetary hora is active right now."""
+        return get_current_hora(self.latitude, self.longitude)
+
+    def get_next_hora(self, planet: str) -> Dict:
+        """When is the next hora for a specific planet."""
+        return get_next_favorable_hora(planet)
+
+    def cast_prashna_refined(self, category: str = "general") -> Dict:
+        """Refined Prashna with classical Ashtamangala rules and yes/no verdict."""
+        self._ensure_chart()
+        from datetime import datetime as dt
+        from .prashna.prashna import PrashnaKundli
+        pk = PrashnaKundli(dt.utcnow(), self.latitude, self.longitude)
+        # Use a JyotishEngine for the prashna moment
+        from .jyotish_engine import JyotishEngine
+        prashna_engine = JyotishEngine(dt.now(), self.latitude, self.longitude)
+        refined = PrashnaRefined(prashna_engine, category)
+        basic = pk.generate_full_prashna(category)
+        refinement = refined.refine()
+        return {
+            "basic_prashna": basic,
+            "refined_verdict": refinement,
+        }
+
+    def get_tithi_pravesh(self, year: int = None) -> Dict:
+        """Tithi Pravesh annual chart — second opinion on the year ahead."""
+        self._ensure_chart()
+        y = year or datetime.now().year
+        return TithiPravesh(self, y).generate_annual_chart()
+
+    def get_composite_chart(self, other_engine) -> Dict:
+        """Composite (midpoint) chart for a relationship."""
+        self._ensure_chart()
+        return CompositeChart(self, other_engine).generate_composite_report()
+
+    def get_transit_calendar(self, months: int = 6) -> Dict:
+        """Personal transit calendar with dates and impact scores."""
+        self._ensure_chart()
+        return TransitCalendar(self).generate_calendar(months)
+
+    def get_vedha(self) -> Dict:
+        """Check vedha obstruction on current transits."""
+        self._ensure_chart()
+        current = self.ephemeris.get_current_transits()
+        moon_rashi = self._planets["Moon"]["rashi"]
+        return check_vedha(current, moon_rashi)
+
+    def get_combustion(self) -> Dict:
+        """Check all planets for combustion with the Sun."""
+        self._ensure_chart()
+        return analyze_combustion(self._planets)
+
+    def get_gandanta(self) -> Dict:
+        """Check all planets for Gandanta (karmic knot) placement."""
+        self._ensure_chart()
+        return analyze_gandanta(self._planets)
 
     # ═══════════════════════════════════════════════════════════════
     # BPHS COMPLETION — 15 remaining classical features

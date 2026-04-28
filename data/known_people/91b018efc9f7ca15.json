@@ -1,0 +1,28 @@
+{
+  "user_key": "91b018efc9f7ca15",
+  "updated": "2026-04-10T11:41:19.988038",
+  "people": [
+    {
+      "id": 1,
+      "name": "Partner",
+      "person_key": "8e9138d652f7eec8",
+      "birth_data": {
+        "year": 2003,
+        "month": 9,
+        "day": 26,
+        "hour": 0,
+        "minute": 35,
+        "lat": 24.585024,
+        "lng": 73.711223
+      },
+      "relationship_type": "spouse",
+      "role_label": "Spouse",
+      "added_via": "match",
+      "added_date": "2026-04-10T11:37:00.844417",
+      "last_referenced": "2026-04-10T11:41:19.987924",
+      "mention_count": 2,
+      "conversation_summary": "Between you, the bond is strong in fate and growth, but not always soft in feeling: the highest pillars are karmic depth at 80 and growth together at 70, while the strain lives in emotional bond at 50 and physical attraction at 40, with the overall 60 like a steady lamp in a windy room.  \nYour chart",
+      "is_active": true
+    }
+  ]
+}

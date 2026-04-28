@@ -431,6 +431,35 @@ class DataAssembler:
         # Build summary text for Oracle
         packet['oracle_briefing'] = self._build_briefing(primary_intent, packet['sections'], intent)
 
+        # ─── COMBUSTION + GANDANTA INJECTION ───
+        try:
+            from ..parashara.combustion import analyze_combustion, format_for_oracle as fmt_combustion
+            from ..transits.vedha import check_vedha, format_for_oracle as fmt_vedha
+            from ..parashara.gandanta import analyze_gandanta, format_for_oracle as fmt_gandanta
+            _comb = analyze_combustion(self.engine.planets)
+            _gand = analyze_gandanta(self.engine.planets)
+            _comb_str = fmt_combustion(_comb)
+            _gand_str = fmt_gandanta(_gand)
+            _extra = ""
+            if _comb_str:
+                _extra += "\n" + _comb_str
+            if _gand_str:
+                _extra += "\n" + _gand_str
+            if _extra:
+                packet["oracle_briefing"] += _extra
+            # Vedha check
+            try:
+                _moon_rashi = self.engine.planets.get("Moon", {}).get("rashi", 1)
+                _current_transits = self.engine.ephemeris.get_current_transits()
+                _vedha = check_vedha(_current_transits, _moon_rashi)
+                _vedha_str = fmt_vedha(_vedha)
+                if _vedha_str:
+                    packet["oracle_briefing"] += "\n" + _vedha_str
+            except Exception:
+                pass
+        except Exception:
+            pass
+
         return packet
 
 

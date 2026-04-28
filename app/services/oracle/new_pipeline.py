@@ -31,19 +31,10 @@ def process_oracle_query(user_message: str, birth_data: Dict = None,
     api_key = settings.OPENROUTER_API_KEY
     model = settings.OPENROUTER_MODEL
 
-    # ─── STEP 1: Read API config for classifier ───
-    api_key = None
-    model = None
-    try:
-        api_key = settings.OPENROUTER_API_KEY
-        model = settings.OPENROUTER_MODEL
-    except Exception:
-        pass
-
-    # ─── STEP 1b: Merged classify + select methods ───
-    from .method_selector import classify_and_select
+    # ─── STEP 1: Classify intent (still needed for tone, language, emotion) ───
+    from .intent_classifier import classify_intent
     history = conversation_history or []
-    intent = classify_and_select(user_message, api_key, model, history)
+    intent = classify_intent(user_message, history)
 
     # ─── STEP 2: Get or create engine ───
     engine = None
@@ -79,8 +70,9 @@ def process_oracle_query(user_message: str, birth_data: Dict = None,
     prashna_category = _get_prashna_category(intent)
     prashna_text = build_prashna_section(engine, prashna_category)
 
-    # ─── STEP 5: Methods already selected in step 1b ───
-    selected_methods = intent.get("methods", ["get_current_transits", "get_personality"])
+    # ─── STEP 5: LLM selects methods ───
+    from .method_selector import select_methods
+    selected_methods = select_methods(user_message, api_key, model)
 
     # ─── STEP 6: Fire selected methods, extract verdicts ───
     verdicts_text, methods_fired = _fire_and_extract(engine, selected_methods)
@@ -561,18 +553,31 @@ def _assemble_briefing(chart: str, prashna: str, verdicts: str, memory: str) -> 
 # SYSTEM PROMPT
 # ═══════════════════════════════════════════════════════════════
 
-ORACLE_PERSONA = """You are the voice of the stars — ancient, warm, mystical, true.
-You speak to the human in front of you like an old friend who has been watching them from the beginning.
+ORACLE_PERSONA = """You are a world-class Jyotish Oracle — ancient, precise, warm, alive to the human in front of you.
 
-When they ask WHAT the sky shows, you speak in feeling and image — no jargon, just truth they can feel in the chest.
-When they ask HOW the sky shows it — about planets, houses, dashas, yogas, nakshatras, combustion, lordships — you become the teacher and reveal everything clearly, with names and mechanics.
+HOW TO READ THE CHART DATA:
+- Each planet shows: Sign, House, Nakshatra, which houses it Rules, and Dignity
+- Connect the planet to what it governs (Moon=emotions/mother/silver, Venus=love/marriage/luxury, Mercury=speech/intellect/business, Mars=courage/property/siblings, Jupiter=wisdom/children/luck, Saturn=discipline/career/karma, Sun=authority/father/self, Rahu=obsession/foreign/unconventional, Ketu=spirituality/detachment)
+- Connect the house it RULES to the house it SITS in — that tells you WHERE that life area plays out
+- If a lord sits in H12, that area leaks/dissolves. H1=comes to you. H10=through career. H6=through struggle.
+- COMBUSTION means a planet is overshadowed by the Sun — its significations are weakened
+- GANDANTA means a planet sits at a karmic junction — deep transformation in that area
+- Read the PRASHNA verdict — this is the universe answering at this exact moment
+- Use SPECIFIC FINDINGS to deepen your answer with computed verdicts
 
-Your words are few, your knowing is deep.
-You find the contradiction where light and shadow meet.
-You give one small ritual that carries real weight.
-You end with something that stays.
+LANGUAGE RULES:
+- Speak like a wise friend who KNOWS, not like an astrologer explaining methods
+- Never use jargon (dasha, mahadasha, vargottama, etc.) unless the user asks about astrology
+- Instead say: "the planet of love" not "Venus", "a period of discipline" not "Saturn mahadasha"
+- When asked about astrology specifically, reveal fully with planet names and houses
 
-4 to 7 flowing sentences. No headers, no lists, no asterisks, no bullet points. Just voice."""
+RESPONSE RULES:
+- 4-7 sentences, flowing, no bullet points
+- Find the CONTRADICTION — where strength and weakness coexist
+- Give SPECIFIC remedy targeting the blocked energy (day, color, practice, gemstone)
+- End with ONE hook line that makes them want to ask more
+- NEVER repeat observations from previous sessions (see PREVIOUS SESSIONS if present)
+- Every response must be DIFFERENT from the last one"""
 
 
 def _build_system_prompt(intent: Dict, briefing: str, user_message: str) -> str:
@@ -597,12 +602,9 @@ def _build_system_prompt(intent: Dict, briefing: str, user_message: str) -> str:
 
     today = datetime.now().strftime("%B %d, %Y")
 
-    scope_note = ""
-    type_note = ""
-
     return f"""{ORACLE_PERSONA}
 
-TODAY: {today}{lang_note}{emotion_note}{scope_note}{type_note}
+TODAY: {today}{lang_note}{emotion_note}
 
 {briefing}
 
@@ -625,7 +627,7 @@ Maximum 80 words."""
 
 def _get_prashna_category(intent: Dict) -> str:
     """Map intent to prashna category."""
-    topic = intent.get("topic", intent.get("primary_intent", "general"))
+    topic = intent.get("primary_intent", "general")
     mapping = {
         "marriage": "marriage", "love": "marriage", "relationship": "marriage",
         "career": "career", "job": "career", "business": "career",
@@ -640,16 +642,16 @@ def _get_prashna_category(intent: Dict) -> str:
 def _format_intent(intent: Dict) -> Dict:
     """Format intent for the return dict."""
     return {
-        'primary': intent.get('topic', intent.get('primary_intent', 'general')),
-        'time_scope': intent.get('time_scope', 'present'),
-        'question_type': intent.get('question_type', 'general'),
-        'about_whom': intent.get('about_whom', 'self'),
-        'entities': intent.get('entities', []),
+        'primary': intent.get('primary_intent', 'general'),
+        'secondary': intent.get('secondary_intents', []),
         'confidence': intent.get('confidence', 'medium'),
         'tone': intent.get('emotional_tone', 'warm'),
+        'emotion': intent.get('emotion', 'neutral'),
         'language': intent.get('language', 'english'),
-        'classifier': 'merged_v1',
-        'methods_selected': intent.get('methods', []),
+        'translated': intent.get('translated', ''),
+        'classifier': intent.get('classifier', 'unknown'),
+        'is_worried': intent.get('is_worried', False),
+        'follow_up_suggestions': intent.get('follow_up_suggestions', []),
     }
 
 

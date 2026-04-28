@@ -1,0 +1,50 @@
+{
+  "user_key": "56a865c374f0eed7",
+  "updated": "2026-04-10T09:06:14.325786",
+  "people": [
+    {
+      "id": 1,
+      "name": "Maya",
+      "person_key": "0588b483f9ffded3",
+      "birth_data": {
+        "year": 1980,
+        "month": 5,
+        "day": 12,
+        "hour": 14,
+        "minute": 30,
+        "lat": 28.61,
+        "lng": 77.21
+      },
+      "relationship_type": "spouse",
+      "role_label": "Spouse",
+      "added_via": "match",
+      "added_date": "2026-04-10T08:58:53.947249",
+      "last_referenced": "2026-04-10T09:06:14.325685",
+      "mention_count": 4,
+      "conversation_summary": "Your bond is not flimsy, but it is not easy: it leans on emotional and karmic depth first, with both of you carrying Leo rising and a strong Sun-Mars current that gives the relationship pride, loyalty, and the sense that you are meant to build something real. The strongest thread is feeling and fate",
+      "is_active": true
+    },
+    {
+      "id": 2,
+      "name": "Arjun",
+      "person_key": "aeb0a3840b61313e",
+      "birth_data": {
+        "year": 1995,
+        "month": 11,
+        "day": 3,
+        "hour": 18,
+        "minute": 15,
+        "lat": 19.07,
+        "lng": 72.87
+      },
+      "relationship_type": "read_only",
+      "role_label": "Read Only",
+      "added_via": "read",
+      "added_date": "2026-04-10T08:59:03.862658",
+      "last_referenced": "2026-04-10T08:59:08.385315",
+      "mention_count": 1,
+      "conversation_summary": "Arjun carries an Aries rising\u2014first-fire, direct, built to begin\u2014and yet the soul keeps turning inward, as if a warrior were also a mystic. Libra in the 7th with Sun, Mercury, and Rahu makes relationships, mirrors, and negotiations central to his fate; he is learned through other people, but not alw",
+      "is_active": true
+    }
+  ]
+}

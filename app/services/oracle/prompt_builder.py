@@ -118,7 +118,7 @@ TOPIC_ANGLES = {
 }
 
 
-def build_oracle_prompt(intent_data: Dict, data_packet: Dict, user_message: str) -> str:
+def build_oracle_prompt(intent_data: Dict, data_packet: Dict, user_message: str, memory_prompt: str = "") -> str:
     language = intent_data.get("language", "english")
     briefing = data_packet.get("oracle_briefing", "")
     oracle_instruction = intent_data.get("oracle_instruction", "")
@@ -152,15 +152,32 @@ def build_oracle_prompt(intent_data: Dict, data_packet: Dict, user_message: str)
 
     today = datetime.now().strftime("%B %d, %Y")
 
+    # Build memory block from recalled user history
+    memory_block = ""
+    user_memory = data_packet.get("user_memory", "")
+    if user_memory:
+        memory_block = f"""
+ORACLE MEMORY (what you already told this person — they cannot see this):
+{user_memory}
+
+CRITICAL MEMORY RULES:
+- NEVER repeat any observation listed above. Find a completely new angle.
+- NEVER reuse any hook listed above. Create something they have never heard.
+- If they already got a remedy, give a DIFFERENT one for a different energy.
+- Returning users should feel you remember them and go deeper each time.
+- Reference previous insights indirectly: 'Beyond what we have explored...' or 'There is another layer...'
+"""
+
+
     if needs_chart:
         prompt = f"""{ORACLE_PERSONA}
 
 TODAY: {today}
-EMOTION NOTE: {emotion_note}
+{memory_prompt}EMOTION NOTE: {emotion_note}
 READING ANGLE: {topic_angle}
 CLASSIFIER INSTRUCTION: {oracle_instruction}
-
-CHART DATA (SYNTHESIS observations are the most important — they are real cross-system findings. USE THEM. LIFE MAP shows all windows for this topic — give the full map, not just current period):
+{memory_block}
+CHART DATA (structured by importance — LEAD finding answers the question directly. PRASHNA is the universe's real-time verdict. Cross-validate VERDICTS before making claims. Use ANOMALIES to personalize — they are real cross-system findings. USE THEM. LIFE MAP shows all windows for this topic — give the full map, not just current period):
 {briefing}
 
 {delivery_note}
@@ -170,7 +187,7 @@ Maximum {max_words} words. One flowing response. End with one specific hook line
     else:
         prompt = f"""{ORACLE_PERSONA}
 TODAY: {today}
-INSTRUCTION: {oracle_instruction}
+{memory_prompt}INSTRUCTION: {oracle_instruction}
 {lang_note}
 Maximum {max_words} words."""
 

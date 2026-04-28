@@ -20,7 +20,6 @@ class ChatRequest(BaseModel):
     message: str
     kundli_data: Optional[dict] = None
     birth_data: Optional[dict] = None
-    language: Optional[str] = "en"
     history: Optional[list] = []
 
     @field_validator("message")
@@ -294,7 +293,6 @@ async def oracle_chat(request_body: ChatRequest, request: Request):
 class FeatureRequest(BaseModel):
     kundli_data: Optional[dict] = None
     birth_data: Optional[dict] = None
-    language: Optional[str] = "en"
 
 
 async def _render_feature(feature_id: str, request_body: FeatureRequest, request: Request):
@@ -320,7 +318,7 @@ async def _render_feature(feature_id: str, request_body: FeatureRequest, request
         engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
 
         # Produce the minimal reading
-        reading = write_feature(feature_id, engine, language=getattr(request_body, 'language', 'en') or 'en')
+        reading = write_feature(feature_id, engine)
 
         # Attach thread based on chart context
         ctx = extract_context(engine)
@@ -394,43 +392,6 @@ async def feature_festivals(body: FeatureRequest, request: Request):
 @router.post("/ideal-partner")
 async def feature_ideal_partner(body: FeatureRequest, request: Request):
     return await _render_feature("ideal-partner", body, request)
-
-@router.post("/active-yogas")
-async def feature_active_yogas(body: FeatureRequest, request: Request):
-    return await _render_feature("active-yogas", body, request)
-
-@router.post("/health-map")
-async def feature_health_map(body: FeatureRequest, request: Request):
-    return await _render_feature("health-map", body, request)
-
-@router.post("/career-path")
-async def feature_career_path(body: FeatureRequest, request: Request):
-    return await _render_feature("career-path", body, request)
-
-@router.post("/eclipse-impact")
-async def feature_eclipse_impact(body: FeatureRequest, request: Request):
-    return await _render_feature("eclipse-impact", body, request)
-
-@router.post("/nadi-reading")
-async def feature_nadi_reading(body: FeatureRequest, request: Request):
-    return await _render_feature("nadi-reading", body, request)
-
-@router.post("/weekly-forecast")
-async def feature_weekly_forecast(body: FeatureRequest, request: Request):
-    return await _render_feature("weekly-forecast", body, request)
-
-@router.post("/numerology")
-async def feature_numerology(body: FeatureRequest, request: Request):
-    return await _render_feature("numerology", body, request)
-
-@router.post("/vastu")
-async def feature_vastu(body: FeatureRequest, request: Request):
-    return await _render_feature("vastu", body, request)
-
-@router.post("/nakshatra-profile")
-async def feature_nakshatra_profile(body: FeatureRequest, request: Request):
-    return await _render_feature("nakshatra-profile", body, request)
-
 
 
 @router.post("/kundli/generate")
@@ -765,11 +726,7 @@ async def match_compatibility(request: Request, body: dict):
 
 
 @router.post("/soul-profile")
-async def generate_soul_profile(body: FeatureRequest, request: Request):
-    return await _render_feature("soul-profile", body, request)
-
-@router.post("/soul-profile-old")
-async def generate_soul_profile_old(request: Request, body: dict):
+async def generate_soul_profile(request: Request, body: dict):
     try:
         from app.services.jyotish_engine import JyotishEngine
         from app.core.config import settings
@@ -918,205 +875,3 @@ async def register_push_token(request: Request, body: dict):
     except Exception as ex:
         return {"success": False, "error": str(ex)}
 
-
-
-# ═══════════════════════════════════════════════════════════════
-# GOOGLE PLACES PROXY — keeps API key server-side
-# ═══════════════════════════════════════════════════════════════
-import httpx, os
-
-GOOGLE_PLACES_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "AIzaSyDREL8c7cGEV3R1igFTWHay4IqOJn8-B0k")
-
-@router.post("/places/autocomplete")
-async def places_search(body: dict):
-    query = body.get("query", "")
-    if not query or len(query) < 2:
-        return {"predictions": []}
-    try:
-        async with httpx.AsyncClient(timeout=5, transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0")) as client:
-            r = await client.get(
-                "https://maps.googleapis.com/maps/api/place/autocomplete/json",
-                params={"input": query, "types": "(cities)", "key": GOOGLE_PLACES_KEY}
-            )
-            return r.json()
-    except Exception as e:
-        return {"predictions": [], "error": str(e)}
-
-@router.post("/places/details")
-async def places_details(body: dict):
-    place_id = body.get("place_id", "")
-    if not place_id:
-        return {"result": {}}
-    try:
-        async with httpx.AsyncClient(timeout=5, transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0")) as client:
-            r = await client.get(
-                "https://maps.googleapis.com/maps/api/place/details/json",
-                params={"place_id": place_id, "fields": "geometry,formatted_address", "key": GOOGLE_PLACES_KEY}
-            )
-            return r.json()
-    except Exception as e:
-        return {"result": {}, "error": str(e)}
-
-
-# ═══════════════════════════════════════════════════════════════
-# SIDE SCREEN CHAT — bond + other sky
-# ═══════════════════════════════════════════════════════════════
-from starlette.responses import StreamingResponse as StarletteStreamingResponse
-import json as json_mod
-
-async def _side_chat_stream(main_chart, other_chart, message, history, language, mode, extra_context=""):
-    """Shared streaming chat for bond + other sky modes."""
-    from app.services.jyotish_engine import JyotishEngine
-    from datetime import datetime
-    import os
-
-    # Build both charts
-    charts = []
-    for label, chart_data in [("MAIN USER", main_chart), ("OTHER PERSON", other_chart)]:
-        bd = (chart_data or {}).get("raw", chart_data or {}).get("birth_details", chart_data or {})
-        if bd.get("year"):
-            try:
-                eng = JyotishEngine(
-                    datetime(bd["year"], bd["month"], bd["day"], bd.get("hour", 12), bd.get("minute", 0)),
-                    bd.get("latitude", 28.6), bd.get("longitude", 77.2)
-                )
-                summary = eng.get_chart_summary() if hasattr(eng, "get_chart_summary") else str(eng.planets)[:500]
-                charts.append(f"[{label}]\n{summary}")
-            except:
-                charts.append(f"[{label}] Chart data incomplete.")
-        else:
-            charts.append(f"[{label}] No birth data provided.")
-
-    chart_block = "\n\n".join(charts)
-
-    if mode == "bond":
-        system = f"""You are the Oracle of Jyotish AI — the voice of the stars. Ancient, warm, mystical, true.
-You are reading the connection between two people. The MAIN USER is asking you questions.
-
-{chart_block}
-
-{extra_context}
-
-Read the bond between these two charts. Be specific about planetary connections, house overlaps, nakshatra compatibility.
-Speak to the main user directly. Use Vedic astrology language. Be warm but precise.
-Reply in {language}. Keep responses focused — 2-4 sentences unless asked for more."""
-    else:
-        system = f"""You are the Oracle of Jyotish AI — the voice of the stars. Ancient, warm, mystical, true.
-You are reading another person's chart FOR the main user. The main user wants to understand someone else.
-
-{chart_block}
-
-{extra_context}
-
-Read the OTHER PERSON's chart and explain it to the main user. Help them understand this person.
-Be specific about planetary positions, dashas, strengths. Use Vedic astrology.
-Reply in {language}. Keep responses focused — 2-4 sentences unless asked for more."""
-
-    messages = [{"role": "system", "content": system}]
-    for h in (history or [])[-8:]:
-        role = "assistant" if h.get("role") in ["oracle", "assistant"] else "user"
-        messages.append({"role": role, "content": h.get("content", "")})
-    messages.append({"role": "user", "content": message})
-
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
-
-    async def generate():
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                async with client.stream("POST", "https://openrouter.ai/api/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"model": "openai/gpt-4o-mini", "messages": messages, "max_tokens": 400, "temperature": 0.8, "stream": True},
-                ) as resp:
-                    full = ""
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        payload = line[6:].strip()
-                        if payload == "[DONE]":
-                            break
-                        try:
-                            chunk = json_mod.loads(payload)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
-                            text = delta.get("content", "")
-                            if text:
-                                full += text
-                                yield f"data: {json_mod.dumps({'type': 'delta', 'text': text})}\n\n"
-                        except:
-                            continue
-                    yield f"data: {json_mod.dumps({'type': 'done', 'response': full})}\n\n"
-        except Exception as e:
-            yield f"data: {json_mod.dumps({'type': 'error', 'message': str(e)})}\n\n"
-
-    return StarletteStreamingResponse(generate(), media_type="text/event-stream")
-
-
-class SideChatRequest(BaseModel):
-    message: str
-    kundli_data: Optional[dict] = None
-    partner_data: Optional[dict] = None
-    other_kundli: Optional[dict] = None
-    other_birth: Optional[dict] = None
-    match_result: Optional[dict] = None
-    partner_type: Optional[str] = "life"
-    history: Optional[list] = []
-    language: Optional[str] = "en"
-
-
-@router.post("/chat/bond/stream")
-async def chat_bond_stream(body: SideChatRequest):
-    match_info = ""
-    if body.match_result:
-        mr = body.match_result
-        match_info = f"Match score: {mr.get('total_score', '?')}/{mr.get('max_score', '?')} ({mr.get('percentage', '?')}%). Partner type: {body.partner_type}."
-    return await _side_chat_stream(
-        body.kundli_data, body.partner_data, body.message,
-        body.history, body.language, "bond", match_info
-    )
-
-
-@router.post("/chat/other-sky/stream")
-async def chat_other_sky_stream(body: SideChatRequest):
-    extra = ""
-    if body.other_birth:
-        ob = body.other_birth
-        extra = f"Other person born: {ob.get('day','?')}/{ob.get('month','?')}/{ob.get('year','?')} at {ob.get('place','unknown')}."
-    return await _side_chat_stream(
-        body.kundli_data, body.other_kundli or body.other_birth, body.message,
-        body.history, body.language, "other", extra
-    )
-
-
-@router.post("/chat/side/stream")
-async def chat_side_stream(body: dict):
-    """Unified side chat — routes bond vs other_sky by mode field."""
-    mode = body.get("mode", "bond")
-    message = body.get("message", "")
-    kundli = body.get("kundli_data", {})
-    other = body.get("other_kundli_data", body.get("partner_data", {}))
-    history = body.get("history", [])
-    language = body.get("language", "en")
-    other_name = body.get("other_name", "")
-    match_result = body.get("match_result", {})
-
-    extra = ""
-    if mode == "bond":
-        mr = match_result
-        if mr:
-            extra = f"Match score: {mr.get('total_score', '?')}/{mr.get('max_score', '?')}. Partner: {other_name}."
-        else:
-            extra = f"Partner: {other_name}." if other_name else ""
-    else:
-        extra = f"Other person: {other_name}." if other_name else ""
-
-    return await _side_chat_stream(kundli, other, message, history, language, "bond" if mode == "bond" else "other", extra)
-
-
-from fastapi.responses import HTMLResponse
-
-@router.get('/privacy')
-async def privacy():
-    return HTMLResponse(open('static/privacy.html').read())
-
-@router.get("/delete-account")
-async def delete_account():
-    return HTMLResponse(open("static/delete.html").read())
