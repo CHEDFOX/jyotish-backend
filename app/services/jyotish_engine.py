@@ -942,6 +942,676 @@ class JyotishEngine:
         """BPHS Ch28: Sign-based aspects."""
         return calculate_rashi_drishti(self.planets)
 
+    # ═══════════════════════════════════════════════════════════════
+    # WESTERN ASTROLOGY (Tropical)
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_western_chart(self) -> Dict:
+        """Complete Western (tropical) chart with aspects, configurations, elements."""
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return wc.generate_full_report()
+
+    def get_western_big_three(self) -> Dict:
+        """Sun sign, Moon sign, Rising sign (Western/tropical)."""
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return wc.get_big_three()
+
+    def get_western_aspects(self) -> list:
+        """All natal aspects in the tropical chart."""
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return wc.get_aspects()
+
+    def get_western_configurations(self) -> list:
+        """Major configurations: Grand Trine, T-Square, Yod, Stellium."""
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return wc.get_configurations()
+
+    def get_western_transits(self) -> list:
+        """Current outer planet transits to natal chart (Western)."""
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return wc.get_current_transits()
+
+    def get_western_profile(self) -> Dict:
+        """Full Western personality profile."""
+        from .western.chart import WesternChart
+        from .western.profiles import WesternProfiles
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return WesternProfiles(wc).get_full_profile()
+
+    def get_western_compatibility(self, other_engine) -> Dict:
+        """Western synastry with another chart."""
+        from .western.chart import WesternChart
+        from .western.compatibility import WesternCompatibility
+        wc1 = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc2 = WesternChart(other_engine.birth_dt, other_engine.latitude, other_engine.longitude)
+        return WesternCompatibility(wc1, wc2).generate_synastry_report()
+
+    def get_western_progressions(self) -> Dict:
+        """Secondary Progressions — day-for-a-year inner development."""
+        from .western.chart import WesternChart
+        from .western.timing import SecondaryProgressions
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return SecondaryProgressions(wc).get_progressed_chart()
+
+    def get_western_solar_return(self, year: int = None) -> Dict:
+        """Solar Return — theme of a specific year."""
+        from .western.chart import WesternChart
+        from .western.timing import SolarReturn
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return SolarReturn(wc, year).generate_solar_return()
+
+    def get_western_solar_arc(self) -> Dict:
+        """Solar Arc Directions — ~1° per year timing."""
+        from .western.chart import WesternChart
+        from .western.timing import SolarArcDirections
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return SolarArcDirections(wc).get_solar_arc()
+
+    def get_western_lilith(self) -> Dict:
+        """Black Moon Lilith — shadow self."""
+        from .western.extras import calculate_lilith
+        return calculate_lilith(self.birth_dt)
+
+    def get_western_fortune(self) -> Dict:
+        """Part of Fortune — where abundance flows."""
+        from .western.chart import WesternChart
+        from .western.extras import calculate_part_of_fortune
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        is_night = wc.planets['Sun'].get('house', 1) > 6
+        return calculate_part_of_fortune(wc._ascendant, wc.planets['Sun']['longitude'],
+                                          wc.planets['Moon']['longitude'], is_night)
+
+    def get_western_fixed_stars(self) -> list:
+        """Fixed star conjunctions with natal planets."""
+        from .western.chart import WesternChart
+        from .western.extras import check_fixed_star_conjunctions
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        return check_fixed_star_conjunctions(wc.planets)
+
+    def get_western_void_moon(self) -> Dict:
+        """Is the Moon void of course right now?"""
+        from .western.chart import WesternChart
+        from .western.extras import check_void_of_course
+        wc = WesternChart(datetime.now(), self.latitude, self.longitude)
+        wc._ensure_calculated()
+        return check_void_of_course(wc.planets['Moon']['longitude'], wc.planets)
+
+    def get_western_composite(self, other_engine) -> Dict:
+        """Composite (midpoint) chart for a relationship."""
+        from .western.chart import WesternChart
+        from .western.extras import calculate_composite
+        wc1 = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc2 = WesternChart(other_engine.birth_dt, other_engine.latitude, other_engine.longitude)
+        return calculate_composite(wc1, wc2)
+
+    def get_western_mutual_receptions(self) -> list:
+        """Find mutual receptions — hidden planet alliances."""
+        from .western.chart import WesternChart
+        from .western.extras import find_mutual_receptions
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        return find_mutual_receptions(wc.planets)
+
+    def get_western_retrograde_stations(self) -> list:
+        """Check for stationary planets at birth — extremely powerful."""
+        from .western.chart import WesternChart
+        from .western.extras import check_retrograde_stations
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        return check_retrograde_stations(self.birth_dt, wc.planets)
+
+    def get_western_lunar_return(self, month: int = None, year: int = None) -> Dict:
+        """Lunar Return — monthly emotional theme."""
+        from .western.chart import WesternChart
+        from .western.extras import calculate_lunar_return
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        natal_moon = wc.planets['Moon']['longitude']
+        return calculate_lunar_return(natal_moon, self.latitude, self.longitude, month, year)
+
+    def get_western_profections(self) -> Dict:
+        """Annual Profections — activated house by age."""
+        from .western.hellenistic import calculate_profections_with_chart
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        asc_idx = int(wc._ascendant / 30)
+        return calculate_profections_with_chart(self.birth_dt, asc_idx)
+
+    def get_western_sect(self) -> Dict:
+        """Sect — day/night chart benefic/malefic recalculation."""
+        from .western.hellenistic import calculate_sect
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        sun_h = wc.planets['Sun'].get('house', 1)
+        return calculate_sect(sun_h, wc.planets)
+
+    def get_western_arabic_parts(self) -> Dict:
+        """20 Arabic Parts/Lots."""
+        from .western.hellenistic import calculate_arabic_parts
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        is_night = wc.planets['Sun'].get('house', 1) > 6
+        return calculate_arabic_parts(wc._ascendant, wc.planets, is_night)
+
+    def get_western_zodiacal_releasing(self) -> Dict:
+        """Zodiacal Releasing from Lot of Fortune."""
+        from .western.hellenistic import calculate_zodiacal_releasing
+        from .western.extras import calculate_part_of_fortune
+        from .western.chart import WesternChart, SIGNS
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        is_night = wc.planets['Sun'].get('house', 1) > 6
+        pof = calculate_part_of_fortune(wc._ascendant, wc.planets['Sun']['longitude'],
+                                         wc.planets['Moon']['longitude'], is_night)
+        return calculate_zodiacal_releasing(pof['sign'], self.birth_dt)
+
+    def get_western_antiscia(self) -> Dict:
+        """Antiscia and Contra-antiscia — hidden planet connections."""
+        from .western.hellenistic import calculate_antiscia
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        return calculate_antiscia(wc.planets)
+
+    def get_western_midpoints(self) -> Dict:
+        """All midpoints with activations (Cosmobiology)."""
+        from .western.midpoints import calculate_all_midpoints, find_midpoint_activations
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        mps = calculate_all_midpoints(wc.planets)
+        acts = find_midpoint_activations(mps, wc.planets)
+        return {'midpoints': mps, 'activations': acts}
+
+    def get_western_harmonics(self) -> Dict:
+        """Harmonic charts — H5 (talent), H7 (inspiration), H9 (spiritual)."""
+        from .western.midpoints import get_key_harmonics
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        return get_key_harmonics(wc.planets)
+
+    def get_western_horary(self, question: str = "", category: str = "general") -> Dict:
+        """Western Horary — Lilly's method."""
+        from .western.hellenistic import western_horary_judgment
+        from .western.chart import WesternChart
+        now = datetime.now()
+        qc = WesternChart(now, self.latitude, self.longitude)
+        report = qc.generate_full_report()
+        return western_horary_judgment(report, question, category)
+
+    # ═══════════════════════════════════════════════════════════════
+    # JAIMINI COMPLETE
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_complete_jaimini(self) -> Dict:
+        """Complete Jaimini — all 12 Arudha Padas, Upapada, Swamsa, yogas."""
+        from .jaimini.jaimini_complete import get_complete_jaimini
+        return get_complete_jaimini(self.planets, self.ascendant_rashi)
+
+    def get_upapada(self) -> Dict:
+        """Upapada Lagna — Jaimini spouse indicator."""
+        from .jaimini.jaimini_complete import calculate_upapada
+        return calculate_upapada(self.planets, self.ascendant_rashi)
+
+    def get_swamsa(self) -> Dict:
+        """Swamsa — soul purpose from Atmakaraka in Navamsa."""
+        from .jaimini.jaimini_complete import calculate_swamsa
+        return calculate_swamsa(self.planets)
+
+    def get_jaimini_yogas(self) -> list:
+        """Jaimini-specific yogas."""
+        from .jaimini.jaimini_complete import check_jaimini_yogas
+        return check_jaimini_yogas(self.planets, self.ascendant_rashi)
+
+    def get_jaimini_aspects(self) -> Dict:
+        """Jaimini rashi-based aspects."""
+        from .jaimini.jaimini_complete import get_jaimini_aspects
+        return get_jaimini_aspects()
+
+    # ═══════════════════════════════════════════════════════════════
+    # MUHURTA COMPLETE
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_muhurta_rules(self, event_type: str = "marriage") -> Dict:
+        """Get muhurta rules for a specific event type (20+ types)."""
+        from .muhurta.muhurta_complete import get_muhurta_rules
+        return get_muhurta_rules(event_type)
+
+    def evaluate_muhurta(self, event_type: str = "marriage") -> Dict:
+        """Evaluate current moment for an event."""
+        from .muhurta.muhurta_complete import evaluate_moment
+        panchanga = self.get_panchanga()
+        return evaluate_moment(panchanga, event_type)
+
+    # ═══════════════════════════════════════════════════════════════
+    # CHINESE ASTROLOGY (BaZi / Four Pillars)
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_chinese_chart(self) -> Dict:
+        """Complete Chinese BaZi (Four Pillars) report."""
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        return bc.generate_report()
+
+    def get_chinese_animal(self) -> Dict:
+        """Chinese zodiac animal sign."""
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        return bc.get_animal_sign()
+
+    def get_chinese_day_master(self) -> Dict:
+        """BaZi Day Master — the self element."""
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        return bc.get_day_master()
+
+    def get_chinese_elements(self) -> Dict:
+        """Five element balance in BaZi chart."""
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        return bc.get_element_balance()
+
+    def get_chinese_luck_periods(self) -> list:
+        """10-year luck periods (Da Yun)."""
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        return bc.get_luck_periods()
+
+    def get_chinese_profile(self) -> Dict:
+        """Full Chinese astrology profile."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.profiles import ChineseProfiles
+        bc = BaZiChart(self.birth_local)
+        return ChineseProfiles(bc).get_full_profile()
+
+    def get_chinese_compatibility(self, other_engine) -> Dict:
+        """Chinese zodiac compatibility with another chart."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.profiles import ChineseCompatibility
+        bc1 = BaZiChart(self.birth_local)
+        bc2 = BaZiChart(other_engine.birth_local)
+        return ChineseCompatibility(bc1, bc2).analyze()
+
+    def get_chinese_interactions(self) -> Dict:
+        """Branch AND stem interactions: clashes, harmonies, punishments, harms, combinations, void."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.interactions import BranchInteractions, StemInteractions
+        bc = BaZiChart(self.birth_local)
+        branch = BranchInteractions(bc).analyze_all()
+        stem = StemInteractions(bc).analyze_all_stems()
+        return {**branch, **stem}
+
+    def get_chinese_stars(self) -> Dict:
+        """Symbolic stars: Nobleman, Peach Blossom, Traveling Horse, Academic."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.stars import SymbolicStars
+        bc = BaZiChart(self.birth_local)
+        return SymbolicStars(bc).analyze_all_stars()
+
+    def get_chinese_annual_luck(self, year: int = None) -> Dict:
+        """How a specific year affects you (Liu Nian)."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.stars import AnnualLuck
+        bc = BaZiChart(self.birth_local)
+        y = year or datetime.now().year
+        return AnnualLuck(bc).analyze_year(y)
+
+    def get_chinese_forecast(self, years: int = 5) -> list:
+        """Multi-year annual forecast."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.stars import AnnualLuck
+        bc = BaZiChart(self.birth_local)
+        return AnnualLuck(bc).forecast_years(years)
+
+    def get_chinese_na_yin(self) -> Dict:
+        """Na Yin — 60 poetic element names for all four pillars."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.advanced import get_all_na_yin
+        bc = BaZiChart(self.birth_local)
+        bc._ensure_calculated()
+        return get_all_na_yin(bc._pillars)
+
+    def get_chinese_life_stages(self) -> Dict:
+        """12 Life Stages (长生十二宫) for the Day Stem."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.advanced import get_life_stages
+        bc = BaZiChart(self.birth_local)
+        bc._ensure_calculated()
+        return get_life_stages(bc._pillars['day']['stem'])
+
+    def get_chinese_yong_shen(self) -> Dict:
+        """Yong Shen (useful god) / Ji Shen (jealous god) analysis."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.advanced import calculate_yong_shen
+        bc = BaZiChart(self.birth_local)
+        dm = bc.get_day_master()
+        elements = bc.get_element_balance()
+        return calculate_yong_shen(dm['element'], elements['counts'], elements['day_master_strength'])
+
+    def get_chinese_extended_stars(self) -> Dict:
+        """30+ symbolic stars (extended set)."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.advanced import get_extended_stars
+        bc = BaZiChart(self.birth_local)
+        bc._ensure_calculated()
+        p = bc._pillars
+        branches = [p[k]['branch'] for k in ['year', 'month', 'day', 'hour']]
+        return get_extended_stars(p['year']['branch'], p['day']['stem'], p['day']['branch'], branches)
+
+    def get_chinese_fan_fu_yin(self) -> Dict:
+        """Fan Yin / Fu Yin — repeated or opposing pillar patterns."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.advanced import check_fan_fu_yin
+        bc = BaZiChart(self.birth_local)
+        bc._ensure_calculated()
+        return check_fan_fu_yin(bc._pillars)
+
+    def get_chinese_advanced(self) -> Dict:
+        """Complete Chinese advanced analysis."""
+        from .chinese.bazi import BaZiChart
+        from .chinese.advanced import get_complete_chinese_advanced
+        bc = BaZiChart(self.birth_local)
+        return get_complete_chinese_advanced(bc)
+
+    # ═══════════════════════════════════════════════════════════════
+    # KP TIMING (Transit Triggers + DBA Matching)
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_kp_timing(self, event: str = "career") -> Dict:
+        """Full KP timing: DBA check + transit triggers combined."""
+        from .kp.kp_timing import KPTransitTiming
+        return KPTransitTiming(self).get_full_timing(event)
+
+    def get_kp_dba_scan(self) -> Dict:
+        """Scan which events are active in current DBA period."""
+        from .kp.kp_timing import KPTransitTiming
+        return KPTransitTiming(self).scan_dba_all_events()
+
+    def get_kp_transit_triggers(self, event: str = "career") -> list:
+        """Current transit planets triggering a specific event."""
+        from .kp.kp_timing import KPTransitTiming
+        return KPTransitTiming(self).check_transit_triggers(event)
+
+    def get_kp_medical(self) -> Dict:
+        """KP Medical diagnosis — body part + disease tendency."""
+        from .kp.kp_advanced import kp_medical_diagnosis
+        return kp_medical_diagnosis(self)
+
+    def get_kp_stellar_theory(self) -> Dict:
+        """KP Stellar Theory — planet behaves as its star lord."""
+        from .kp.kp_advanced import stellar_theory_analysis
+        return stellar_theory_analysis(self)
+
+    def get_kp_four_level(self, planet: str = "Moon") -> Dict:
+        """4-level chain: Star → Sub → Sub-sub → Sub-sub-sub."""
+        from .kp.kp_advanced import get_four_level_chain
+        p_long = self.planets.get(planet, {}).get('longitude', 0)
+        result = get_four_level_chain(p_long)
+        result['planet'] = planet
+        return result
+
+    # ═══════════════════════════════════════════════════════════════
+    # KP HORARY (Number-based)
+    # ═══════════════════════════════════════════════════════════════
+
+    def kp_horary(self, number: int, question: str = "", category: str = "general") -> Dict:
+        """KP Horary analysis using number 1-249."""
+        from .kp.kp_horary import KPHorary
+        kph = KPHorary(number, question, category, self.latitude, self.longitude)
+        return kph.analyze()
+
+    # ═══════════════════════════════════════════════════════════════
+    # WIRED-IN MODULES (previously orphaned)
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_daridra_yogas(self) -> list:
+        """BPHS Ch.42 — poverty/penury yogas."""
+        from .predictions.daridra_yogas import check_daridra_yogas
+        return check_daridra_yogas(self)
+
+    def get_female_horoscopy(self) -> list:
+        """BPHS Ch.77-80 — female-specific chart rules."""
+        from .predictions.female_horoscopy import get_female_specific_rules
+        return get_female_specific_rules(self)
+
+    def get_longevity(self) -> Dict:
+        """BPHS Ch.40 — longevity determination (3-pair method)."""
+        from .predictions.longevity_calc import calculate_longevity
+        return calculate_longevity(self)
+
+    def get_dasha_psychology(self) -> Dict:
+        """Psychological state based on current dasha lord."""
+        from .predictions.dasha_psychology import get_psychological_state
+        return get_psychological_state(self)
+
+    def get_dasha_interpretation(self) -> Dict:
+        """BPHS Ch.45-50 — current dasha period interpretation."""
+        from .predictions.dasha_effects import get_current_dasha_interpretation
+        return get_current_dasha_interpretation(self)
+
+    def get_special_lagnas(self) -> Dict:
+        """BPHS Ch.5 — Hora Lagna, Ghati Lagna effects."""
+        from .predictions.special_lagnas import get_special_lagna_effects
+        return get_special_lagna_effects(self)
+
+    def get_compatibility_detail(self, other_engine) -> Dict:
+        """Detailed Ashtakoota breakdown with explanations."""
+        from .compatibility.compatibility_detail import detailed_compatibility
+        return detailed_compatibility(self, other_engine)
+
+    # ═══════════════════════════════════════════════════════════════
+    # NEW: BPHS EXTENDED
+    # ═══════════════════════════════════════════════════════════════
+    def get_d60_interpretation(self) -> Dict:
+        from .parashara.bphs_extended import get_all_d60
+        return get_all_d60(self.planets)
+
+    def get_remaining_vargas(self) -> Dict:
+        from .parashara.bphs_extended import interpret_all_remaining_vargas
+        return interpret_all_remaining_vargas(self)
+
+    def get_mrityu_bhaga(self) -> list:
+        from .parashara.bphs_extended import check_mrityu_bhaga
+        return check_mrityu_bhaga(self.planets)
+
+    def get_bhrigu_bindu(self) -> Dict:
+        from .parashara.bphs_extended import calculate_bhrigu_bindu
+        return calculate_bhrigu_bindu(self.planets)
+
+    def get_pada_archetypes(self) -> Dict:
+        from .parashara.bphs_extended import get_all_planet_padas
+        return get_all_planet_padas(self.planets)
+
+    def get_pancha_pakshi(self) -> Dict:
+        from .parashara.bphs_extended import get_pancha_pakshi
+        moon_nak = int(self.planets.get('Moon', {}).get('longitude', 0) / (360/27)) % 27
+        return get_pancha_pakshi(moon_nak)
+
+    def get_graha_shanti(self) -> Dict:
+        from .parashara.bphs_extended import get_full_graha_shanti
+        weak = [n for n in ['Sun','Moon','Mars','Mercury','Jupiter','Venus','Saturn']
+                if self.planets.get(n, {}).get('dignity', '') in ('debilitated', 'Debilitated', 'combust')]
+        if not weak:
+            weak = [self.get_vimshottari_dasha().get('mahadasha', {}).get('lord', 'Saturn')]
+        return get_full_graha_shanti(weak)
+
+    # ═══════════════════════════════════════════════════════════════
+    # NEW: KP EXTENDED
+    # ═══════════════════════════════════════════════════════════════
+    def get_kp_sensitive_points(self, months: int = 12) -> Dict:
+        from .kp.kp_extended import calculate_sensitive_points
+        return calculate_sensitive_points(self, months)
+
+    def get_kp_marriage_match(self, other_engine) -> Dict:
+        from .kp.kp_extended import kp_marriage_match
+        return kp_marriage_match(self, other_engine)
+
+    def get_kp_profession(self) -> Dict:
+        from .kp.kp_extended import kp_profession
+        return kp_profession(self)
+
+    def get_kp_cuspal_interlinks(self) -> list:
+        from .kp.kp_extended import find_cuspal_interlinks
+        return find_cuspal_interlinks(self)
+
+    def get_kp_lost_object(self) -> Dict:
+        from .kp.kp_extended import kp_lost_object
+        return kp_lost_object(self)
+
+    def get_kp_rp_timing(self) -> Dict:
+        from .kp.kp_extended import get_rp_timing
+        return get_rp_timing(self)
+
+    # ═══════════════════════════════════════════════════════════════
+    # NEW: WESTERN EXTENDED
+    # ═══════════════════════════════════════════════════════════════
+    def get_western_full_dignities(self) -> Dict:
+        from .western.extended import calculate_all_dignities
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        is_day = wc.planets['Sun'].get('house', 1) <= 6
+        return calculate_all_dignities(wc.planets, is_day)
+
+    def get_western_almuten(self) -> Dict:
+        from .western.extended import calculate_almuten
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        is_day = wc.planets['Sun'].get('house', 1) <= 6
+        return calculate_almuten(wc.planets, wc._ascendant, wc._midheaven, is_day)
+
+    def get_western_hayz(self) -> Dict:
+        from .western.extended import check_hayz
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        is_day = wc.planets['Sun'].get('house', 1) <= 6
+        return check_hayz(wc.planets, is_day)
+
+    def get_western_joys(self) -> list:
+        from .western.extended import check_planetary_joys
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        return check_planetary_joys(wc.planets)
+
+    def get_western_asteroids(self) -> Dict:
+        from .western.extended import calculate_asteroids
+        return calculate_asteroids(self.birth_dt)
+
+    def get_western_planetary_nodes(self) -> Dict:
+        from .western.extended import get_planetary_nodes
+        return get_planetary_nodes()
+
+    def get_western_prenatal(self) -> Dict:
+        from .western.extended import find_prenatal_lunation
+        return find_prenatal_lunation(self.birth_dt)
+
+    def get_western_decennials(self) -> Dict:
+        from .western.extended import calculate_decennials
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        wc._ensure_calculated()
+        is_day = wc.planets['Sun'].get('house', 1) <= 6
+        return calculate_decennials(self.birth_dt, is_day)
+
+    def get_western_tertiary(self) -> Dict:
+        from .western.extended import tertiary_progressions
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return tertiary_progressions(wc)
+
+    def get_western_converse(self) -> Dict:
+        from .western.extended import converse_progressions
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return converse_progressions(wc)
+
+    def get_western_prog_lunation(self) -> Dict:
+        from .western.extended import progressed_lunation_cycle
+        from .western.chart import WesternChart
+        wc = WesternChart(self.birth_dt, self.latitude, self.longitude)
+        return progressed_lunation_cycle(wc)
+
+    def get_western_electional(self) -> Dict:
+        from .western.extended import evaluate_electional_moment
+        return evaluate_electional_moment(self.birth_dt, self.latitude, self.longitude)
+
+    # ═══════════════════════════════════════════════════════════════
+    # NEW: CHINESE EXTENDED
+    # ═══════════════════════════════════════════════════════════════
+    def get_chinese_dayun_onset(self, gender: str = "male") -> Dict:
+        from .chinese.extended import calculate_dayun_onset
+        bc = __import__('app.services.chinese.bazi', fromlist=['BaZiChart']).BaZiChart(self.birth_local)
+        bc._ensure_calculated()
+        return calculate_dayun_onset(self.birth_local, bc._pillars['year']['stem'], gender)
+
+    def get_chinese_xiao_yun(self, gender: str = "male") -> list:
+        from .chinese.extended import calculate_xiao_yun, calculate_dayun_onset
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        bc._ensure_calculated()
+        onset = calculate_dayun_onset(self.birth_local, bc._pillars['year']['stem'], gender)
+        return calculate_xiao_yun(self.birth_local, bc._pillars['year']['stem'],
+                                   bc._pillars['hour']['branch'], onset['onset_years'], gender)
+
+    def get_chinese_pillar_overlay(self) -> Dict:
+        from .chinese.extended import get_current_pillar_overlay
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        return get_current_pillar_overlay(bc)
+
+    def get_chinese_hidden_strength(self) -> Dict:
+        from .chinese.extended import get_hidden_stems_with_strength
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        bc._ensure_calculated()
+        return get_hidden_stems_with_strength(bc._pillars)
+
+    def get_chinese_gods_matrix(self) -> list:
+        from .chinese.extended import analyze_ten_gods_matrix
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        return analyze_ten_gods_matrix(bc.get_ten_gods())
+
+    def get_chinese_date_selection(self, event: str = "general") -> list:
+        from .chinese.extended import select_auspicious_date
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        dm = bc.get_day_master()
+        return select_auspicious_date(dm['element'], event)
+
+    def get_chinese_feng_shui(self) -> Dict:
+        from .chinese.extended import get_feng_shui_directions
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        return get_feng_shui_directions(bc.get_day_master()['element'])
+
+    def get_chinese_medical(self) -> Dict:
+        from .chinese.extended import chinese_medical_analysis
+        from .chinese.bazi import BaZiChart
+        bc = BaZiChart(self.birth_local)
+        dm = bc.get_day_master()
+        elem = bc.get_element_balance()
+        return chinese_medical_analysis(elem['counts'], dm['element'], elem['day_master_strength'])
+
+    def get_zi_wei_chart(self) -> Dict:
+        from .chinese.ziwei import ZiWeiChart
+        zw = ZiWeiChart(self.birth_local, 'male')
+        return zw.generate_report()
+
 
 def create_engine(birth_datetime: datetime, latitude: float, longitude: float,
                   ayanamsa: str = 'LAHIRI') -> JyotishEngine:

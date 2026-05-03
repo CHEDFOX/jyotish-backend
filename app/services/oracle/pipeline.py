@@ -1,52 +1,48 @@
 """
-ORACLE PIPELINE v2
-The new flow:
-  1. Build organized chart (906 chars, cached)
-  2. Cast Prashna for this moment
-  3. LLM selector picks 4-8 methods for this question
-  4. Fire selected methods, extract verdict lines
-  5. Recall user memory
-  6. Assemble clean briefing: chart + prashna + verdicts + memory
-  7. Send to Oracle LLM
-  8. Store memory after response
+ORACLE PIPELINE v3
+Flow:
+  1. Classifier → topic, emotion, language, sections[]
+  2. Base chart (system-specific, always included)
+  3. Requested sections (raw data, not pre-interpreted)
+  4. User memory
+  5. Assemble: persona + chart + sections + memory
+  6. Return for one LLM call
 
 Two LLM calls total:
-  - Selector: ~$0.0002, ~500ms
-  - Oracle:   ~$0.0006, ~3-4s
-  Total: ~$0.0008 per query
+  - Classifier: ~$0.0001  (tiny prompt)
+  - Oracle:     ~$0.0008  (reads real data)
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional
-import traceback
+from typing import Dict
 
 
 def process_oracle_query(user_message: str, birth_data: Dict = None,
-                          conversation_history: list = None) -> Dict:
-    """Main entry point — replaces old pipeline."""
+                          conversation_history: list = None,
+                          system: str = "bphs",
+                          extras: Dict = None) -> Dict:
+    """Main entry point."""
     start_time = datetime.now()
+    extras = extras or {}
+    system = (system or "bphs").lower()
 
-    # ─── STEP 0: Get API config ───
+    # ─── API config ───
     from app.core.config import settings
-    api_key = settings.OPENROUTER_API_KEY
-    model = settings.OPENROUTER_MODEL
-
-    # ─── STEP 1: Read API config for classifier ───
-    api_key = None
-    model = None
     try:
         api_key = settings.OPENROUTER_API_KEY
         model = settings.OPENROUTER_MODEL
     except Exception:
-        pass
+        api_key = None
+        model = None
 
-    # ─── STEP 1b: Merged classify + select methods ───
-    from .method_selector import classify_and_select
+    # ─── Classify ───
+    from .classifier import classify
     history = conversation_history or []
-    intent = classify_and_select(user_message, api_key, model, history)
+    intent = classify(user_message, api_key, model, system, history)
 
-    # ─── STEP 2: Get or create engine ───
+    # ─── Engine ───
     engine = None
+    cache_hit = False
     if birth_data:
         from .engine_cache import get_cached_engine
         birth_dt = datetime(
@@ -54,47 +50,46 @@ def process_oracle_query(user_message: str, birth_data: Dict = None,
             birth_data.get('hour', 12), birth_data.get('minute', 0)
         )
         engine, cache_hit = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
-    else:
-        cache_hit = False
 
     if not engine:
-        # No birth data — generic response
         elapsed = (datetime.now() - start_time).total_seconds() * 1000
         return {
-            'system_prompt': _build_no_chart_prompt(intent, user_message),
+            'system_prompt': _build_no_chart_prompt(system),
             'user_prompt': user_message,
             'birth_data': birth_data,
             'intent': _format_intent(intent),
-            'data_packet': {'oracle_briefing': 'No birth data.'},
+            'data_packet': {'oracle_briefing': 'No birth data provided.'},
             'cache_hit': False,
-            'methods_fired': [],
+            'sections_built': [],
             'processing_time_ms': round(elapsed),
         }
 
-    # ─── STEP 3: Build organized chart (cached on engine) ───
-    from .chart_builder import build_organized_chart, build_prashna_section, build_memory_section
-    chart_text = build_organized_chart(engine)
+    # ─── Base chart ───
+    base_chart = _build_base_chart(engine, system)
 
-    # ─── STEP 4: Cast Prashna ───
-    prashna_category = _get_prashna_category(intent)
-    prashna_text = build_prashna_section(engine, prashna_category)
+    # ─── Sections ───
+    sections = intent.get("sections", [])
+    topic = intent.get("topic", "general")
+    sections_text = _build_sections(engine, system, sections, topic, extras)
 
-    # ─── STEP 5: Methods already selected in step 1b ───
-    selected_methods = intent.get("methods", ["get_current_transits", "get_personality"])
-
-    # ─── STEP 6: Fire selected methods, extract verdicts ───
-    verdicts_text, methods_fired = _fire_and_extract(engine, selected_methods)
-
-    # ─── STEP 7: Recall user memory ───
-    memory_text = ""
+    # ─── Portrait (replaces old memory) ───
+    portrait_text = ""
     if birth_data:
-        memory_text = build_memory_section(birth_data)
+        try:
+            from .portrait import build_portrait_block
+            portrait_text = build_portrait_block(birth_data)
+        except Exception:
+            pass
 
-    # ─── STEP 8: Assemble briefing ───
-    briefing = _assemble_briefing(chart_text, prashna_text, verdicts_text, memory_text)
+    # ─── Assemble ───
+    briefing = base_chart
+    if sections_text:
+        briefing += "\n\n" + sections_text
+    if portrait_text:
+        briefing += "\n\n" + portrait_text
 
-    # ─── STEP 9: Build system prompt ───
-    system_prompt = _build_system_prompt(intent, briefing, user_message)
+    # ─── System prompt ───
+    system_prompt = _build_system_prompt(system, intent, briefing, user_message)
 
     elapsed = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -103,563 +98,142 @@ def process_oracle_query(user_message: str, birth_data: Dict = None,
         'user_prompt': user_message,
         'birth_data': birth_data,
         'intent': _format_intent(intent),
-        'data_packet': {
-            'oracle_briefing': briefing,
-            'user_memory': memory_text,
-        },
+        'data_packet': {'oracle_briefing': briefing},
         'cache_hit': cache_hit,
-        'methods_fired': methods_fired,
+        'sections_built': sections,
         'processing_time_ms': round(elapsed),
+        # Keep backward compatibility
+        'methods_fired': sections,
     }
-
-
-# ═══════════════════════════════════════════════════════════════
-# FIRE & EXTRACT — call engine methods, extract verdict lines
-# ═══════════════════════════════════════════════════════════════
-
-def _fire_and_extract(engine, selected_methods: List[str]) -> tuple:
-    """
-    Fire each selected method on the engine.
-    Extract ONE verdict line from each result.
-    Returns (verdicts_text, methods_fired_list)
-    """
-    lines = []
-    fired = []
-
-    for method_spec in selected_methods:
-        try:
-            # Parse "method_name" or "method_name:arg" or "method_name:arg1:arg2"
-            parts = method_spec.split(":")
-            method_name = parts[0].strip()
-            args = [p.strip() for p in parts[1:]] if len(parts) > 1 else []
-
-            method = getattr(engine, method_name, None)
-            if not method:
-                continue
-
-            # Convert string args to appropriate types
-            converted_args = []
-            for arg in args:
-                # Try int
-                try:
-                    converted_args.append(int(arg))
-                    continue
-                except ValueError:
-                    pass
-                # Try float
-                try:
-                    converted_args.append(float(arg))
-                    continue
-                except ValueError:
-                    pass
-                # Keep as string
-                converted_args.append(arg)
-
-            result = method(*converted_args) if converted_args else method()
-            fired.append(method_name)
-
-            # Extract verdict line(s) from result
-            verdict = _extract_verdict(method_name, result)
-            if verdict:
-                lines.append(verdict)
-
-        except Exception as e:
-            # Silent fail — don't break the pipeline for one method
-            fired.append(method_name + " (error)")
-            continue
-
-    return "\n".join(lines), fired
-
-
-def _extract_verdict(method_name: str, result) -> str:
-    """
-    Extract ONE concise verdict line from a method's result.
-    This is the art — pull the ANSWER, not the data.
-    """
-    if result is None:
-        return ""
-
-    if isinstance(result, str):
-        return result[:200] if len(result) > 20 else ""
-
-    if not isinstance(result, dict):
-        if isinstance(result, list) and result:
-            # Lists (like yoga_timing, transit_aspects) — summarize
-            return f"{method_name}: {len(result)} items found"
-        return ""
-
-    mn = method_name.lower()
-
-    # ─── Chart Promise / Classical Analysis ───
-    if "chart_promise" in mn or "classical" in mn:
-        summary = result.get("summary", "")
-        supports = result.get("supports", result.get("supporting_count", 0))
-        opposes = result.get("opposes", result.get("opposing_count", 0))
-        if isinstance(supports, list):
-            supports = len(supports)
-        if isinstance(opposes, list):
-            opposes = len(opposes)
-        rules = result.get("rules_fired", 0)
-        denial = result.get("denial_count", result.get("denials", 0))
-
-        # Include top supporting/opposing rules if available
-        top_rules = ""
-        support_list = result.get("supports", [])
-        oppose_list = result.get("opposes", [])
-        if isinstance(support_list, list) and support_list:
-            texts = []
-            for r in support_list[:2]:
-                t = r.get("text", str(r)) if isinstance(r, dict) else str(r)
-                texts.append(t[:80])
-            top_rules += " Supports: " + "; ".join(texts) + "."
-        if isinstance(oppose_list, list) and oppose_list:
-            texts = []
-            for r in oppose_list[:2]:
-                t = r.get("text", str(r)) if isinstance(r, dict) else str(r)
-                texts.append(t[:80])
-            top_rules += " Opposes: " + "; ".join(texts) + "."
-
-        if summary:
-            return f"Classical/Promise: {summary} ({supports} support, {opposes} oppose, {denial} denials).{top_rules}"
-        return ""
-
-    # ─── KP Event Analysis ───
-    if "kp_event" in mn or "kp_verify" in mn:
-        promised = result.get("promised", result.get("is_promised"))
-        verdict = result.get("verdict", result.get("kp_verdict", ""))
-        if promised is not None:
-            word = "PROMISED" if promised else "NOT PROMISED"
-            return f"KP System: {word}. {verdict}"
-        return f"KP: {verdict}" if verdict else ""
-
-    # ─── Predict Event (Timing) ───
-    if "predict_event" in mn:
-        window = result.get("window", result.get("best_window", {}))
-        if isinstance(window, dict) and window:
-            start = window.get("start", window.get("from", ""))
-            end = window.get("end", window.get("to", ""))
-            strength = window.get("strength", window.get("quality", ""))
-            return f"Timing window: {start} to {end} ({strength})"
-        summary = result.get("summary", "")
-        if summary:
-            return f"Timing: {summary}"
-        return ""
-
-    # ─── Navamsa Analysis ───
-    if "navamsa" in mn:
-        spouse = result.get("spouse_description", result.get("partner_nature", ""))
-        venus = result.get("venus_navamsa", {})
-        v_text = venus.get("interpretation", "") if isinstance(venus, dict) else ""
-        parts = []
-        if spouse:
-            parts.append(f"Spouse nature: {spouse}")
-        if v_text:
-            parts.append(f"Venus in D9: {v_text}")
-        return "D9: " + ". ".join(parts) if parts else ""
-
-    # ─── Career Analysis / Aptitude ───
-    if "career_analysis" in mn:
-        field = result.get("recommended_field", result.get("career_type", ""))
-        return f"D10 Career: {field}" if field else ""
-
-    if "career_aptitude" in mn:
-        top = result.get("top_fields", result.get("aptitude", []))
-        if isinstance(top, list) and top:
-            fields = []
-            for f in top[:3]:
-                if isinstance(f, dict):
-                    fields.append(f"{f.get('field', '')}: {f.get('score', '')}%")
-                else:
-                    fields.append(str(f))
-            return "Career aptitude: " + ", ".join(fields)
-        return ""
-
-    # ─── Jaimini Karakas ───
-    if "karaka" in mn and "karakamsa" not in mn:
-        ak = result.get("atmakaraka", {})
-        dk = result.get("darakaraka", {})
-        parts = []
-        if isinstance(ak, dict) and ak.get("planet"):
-            parts.append(f"Atmakaraka (soul): {ak['planet']}")
-        if isinstance(dk, dict) and dk.get("planet"):
-            parts.append(f"Darakaraka (spouse): {dk['planet']}")
-        return "Jaimini: " + ", ".join(parts) if parts else ""
-
-    # ─── Karakamsa ───
-    if "karakamsa" in mn:
-        purpose = result.get("purpose", result.get("indication", ""))
-        return f"Karakamsa: {purpose}" if purpose else ""
-
-    # ─── Manglik ───
-    if "manglik" in mn:
-        is_m = result.get("is_manglik", False)
-        cancelled = result.get("is_cancelled", False)
-        text = f"Manglik: {'Yes' if is_m else 'No'}"
-        if cancelled:
-            text += f" (Cancelled: {result.get('cancellation_reason', 'natural')})"
-        return text
-
-    # ─── Transit Calendar ───
-    if "transit_calendar" in mn:
-        months = result.get("months", [])
-        verdict = result.get("period_verdict", "")
-        lines = []
-        if verdict:
-            lines.append(f"Transit forecast: {verdict}")
-        for m in months[:3]:
-            if isinstance(m, dict):
-                lines.append(f"  {m.get('short', '')}: {m.get('score', '')}/100 {m.get('theme', '')}")
-        key_dates = result.get("key_dates", [])
-        for kd in key_dates[:3]:
-            if isinstance(kd, dict):
-                fav = "favorable" if kd.get("favorable") else "challenging"
-                lines.append(f"  {kd.get('date', '')}: {kd.get('event', '')} ({fav})")
-        return "\n".join(lines)
-
-    # ─── Medical Report ───
-    if "medical" in mn:
-        vulnerabilities = result.get("vulnerabilities", result.get("health_areas", []))
-        longevity = result.get("longevity", "")
-        parts = []
-        if longevity:
-            parts.append(f"Longevity: {longevity}")
-        if isinstance(vulnerabilities, list):
-            for v in vulnerabilities[:2]:
-                if isinstance(v, dict):
-                    parts.append(v.get("area", v.get("description", "")))
-                else:
-                    parts.append(str(v))
-        return "Health: " + ". ".join(parts) if parts else ""
-
-    # ─── Chakra ───
-    if "chakra" in mn:
-        chakras = result.get("blocked_chakras", result.get("chakras", []))
-        blocked = []
-        if isinstance(chakras, list):
-            for ch in chakras:
-                if isinstance(ch, dict):
-                    status = ch.get("status", "")
-                    if "blocked" in str(status).lower() or "weak" in str(status).lower():
-                        blocked.append(f"{ch.get('name', '')}: {status}")
-        return "Chakras blocked: " + ", ".join(blocked) if blocked else ""
-
-    # ─── Remedies ───
-    if "remedies" in mn or "gemstone" in mn:
-        if isinstance(result, list):
-            # Gemstone list
-            gems = []
-            for g in result[:3]:
-                if isinstance(g, dict):
-                    gems.append(f"{g.get('gemstone', '')} for {g.get('planet', '')} ({g.get('reason', '')[:60]})")
-            return "Gemstones: " + " | ".join(gems) if gems else ""
-        elif isinstance(result, dict):
-            gems = result.get("gemstones", [])
-            mantras = result.get("mantras", [])
-            parts = []
-            if isinstance(gems, list) and gems:
-                for g in gems[:2]:
-                    if isinstance(g, dict):
-                        parts.append(f"Gem: {g.get('gemstone', '')} for {g.get('planet', '')}")
-            if isinstance(mantras, list) and mantras:
-                for m in mantras[:2]:
-                    if isinstance(m, dict):
-                        parts.append(f"Mantra: {m.get('mantra', '')} for {m.get('planet', '')}")
-            return "Remedies: " + " | ".join(parts) if parts else ""
-        return ""
-
-    # ─── Nadi Reading ───
-    if "nadi" in mn:
-        predictions = result.get("predictions", result.get("readings", []))
-        if isinstance(predictions, list) and predictions:
-            texts = []
-            for p in predictions[:2]:
-                if isinstance(p, dict):
-                    texts.append(p.get("prediction", p.get("text", ""))[:80])
-                else:
-                    texts.append(str(p)[:80])
-            return "Nadi: " + " | ".join(texts)
-        return ""
-
-    # ─── Personality ───
-    if "personality" in mn:
-        archetype = result.get("archetype", result.get("personality_type", ""))
-        return f"Personality: {archetype}" if archetype else ""
-
-    # ─── Sannyasa Yogas ───
-    if "sannyasa" in mn:
-        yogas = result.get("yogas", [])
-        return f"Sannyasa yogas: {len(yogas)} found" if yogas else "No sannyasa yogas"
-
-    # ─── Muhurta ───
-    if "muhurta" in mn and "find" in mn:
-        dates = result.get("dates", result.get("auspicious_dates", []))
-        if isinstance(dates, list) and dates:
-            top = dates[0]
-            if isinstance(top, dict):
-                return f"Best muhurta: {top.get('date', '')} ({top.get('quality', top.get('score', ''))})"
-            return f"Best muhurta: {top}"
-        return ""
-
-    # ─── Time Queries ───
-    if "query_time" in mn or "query_month" in mn or "analyze_hour" in mn:
-        score = result.get("score", "")
-        themes = result.get("themes", [])
-        overall = result.get("overall", "")
-        dasha = result.get("dasha", {})
-        dasha_str = dasha.get("dasha_string", "") if isinstance(dasha, dict) else ""
-        parts = []
-        if overall:
-            parts.append(f"Overall: {overall}")
-        if score:
-            parts.append(f"Score: {score}/100")
-        if dasha_str:
-            parts.append(f"Dasha: {dasha_str}")
-        if themes:
-            parts.append(f"Themes: {', '.join(themes[:3])}")
-        return " | ".join(parts) if parts else ""
-
-    # ─── Realtime Dashboard ───
-    if "dashboard" in mn or "realtime" in mn:
-        hora = result.get("current_hora", "")
-        chog = result.get("choghadiya", {})
-        advice = result.get("quick_advice", "")
-        parts = []
-        if hora:
-            parts.append(f"Hora: {hora}")
-        if isinstance(chog, dict) and chog.get("name"):
-            parts.append(f"Choghadiya: {chog['name']} ({chog.get('nature', '')})")
-        if advice:
-            parts.append(f"Advice: {advice[:80]}")
-        return " | ".join(parts) if parts else ""
-
-    # ─── Weekly Forecast ───
-    if "weekly" in mn:
-        summary = result.get("summary", result.get("week_summary", ""))
-        if summary:
-            return f"Weekly: {str(summary)[:150]}"
-        return ""
-
-    # ─── Varshaphal / Annual ───
-    if "varshaphal" in mn or "annual" in mn:
-        overall = result.get("overall", {})
-        if isinstance(overall, dict):
-            rating = overall.get("rating", "")
-            score = overall.get("score", "")
-            summary = overall.get("summary", "")
-            return f"Annual {result.get('year', '')}: {rating} ({score}/100). {summary[:80]}"
-        return ""
-
-    # ─── Tithi Pravesh ───
-    if "tithi_pravesh" in mn:
-        analysis = result.get("analysis", {})
-        cv = result.get("cross_validation", {})
-        if isinstance(analysis, dict):
-            rating = analysis.get("overall_rating", "")
-            score = analysis.get("score", "")
-            conf = cv.get("confidence", "") if isinstance(cv, dict) else ""
-            return f"Tithi Pravesh: {rating} year (score {score}). {conf}"
-        return ""
-
-    # ─── Past Event ───
-    if "past_event" in mn or "explain" in mn:
-        explanation = result.get("explanation", result.get("summary", ""))
-        return f"Past event: {str(explanation)[:150]}" if explanation else ""
-
-    # ─── Vedha ───
-    if "vedha" in mn:
-        obstructed = result.get("obstructed_count", 0)
-        if obstructed:
-            blocked = [r for r in result.get("vedha_results", []) if r.get("is_obstructed")]
-            parts = [f"{b['planet']} H{b['transit_house']} blocked by {b['obstructing_planet']}" for b in blocked]
-            return "Vedha: " + ", ".join(parts)
-        return ""
-
-    # ─── Eclipse ───
-    if "eclipse" in mn:
-        eclipses = result.get("eclipses", result.get("upcoming", []))
-        if isinstance(eclipses, list) and eclipses:
-            e = eclipses[0]
-            if isinstance(e, dict):
-                return f"Next eclipse: {e.get('date', '')} {e.get('type', '')} — {e.get('personal_impact', '')[:80]}"
-        return ""
-
-    # ─── Sade Sati ───
-    if "sade_sati" in mn:
-        active = result.get("is_sade_sati", False)
-        phase = result.get("phase", "")
-        return f"Sade Sati: {'ACTIVE (' + phase + ')' if active else 'Not active'}"
-
-    # ─── Synastry ───
-    if "synastry" in mn:
-        score = result.get("score", result.get("overall_score", ""))
-        verdict = result.get("verdict", result.get("compatibility", ""))
-        return f"Synastry: {verdict} (score: {score})" if verdict else ""
-
-    # ─── Numerology ───
-    if "numerology" in mn or "personal_day" in mn:
-        if "personal_day" in mn:
-            return f"Personal day: {result.get('day', '')} | month: {result.get('month', '')} | year: {result.get('year', '')}"
-        mulank = result.get("mulank", result.get("life_path", ""))
-        bhagyank = result.get("bhagyank", result.get("destiny", ""))
-        return f"Numerology: Mulank {mulank}, Bhagyank {bhagyank}" if mulank else ""
-
-    # ─── Vastu ───
-    if "vastu" in mn:
-        direction = result.get("best_direction", result.get("lucky_direction", ""))
-        return f"Vastu: Best direction {direction}" if direction else ""
-
-    # ─── Lucky Numbers ───
-    if "lucky" in mn:
-        numbers = result.get("lucky_numbers", result.get("numbers", []))
-        return f"Lucky numbers: {numbers}" if numbers else ""
-
-    # ─── Baby Names ───
-    if "baby" in mn:
-        names = result.get("names", result.get("suggestions", []))
-        if isinstance(names, list) and names:
-            return f"Baby name letters: {', '.join(str(n) for n in names[:5])}"
-        return ""
-
-    # ─── Maraka ───
-    if "maraka" in mn:
-        planets_m = result.get("maraka_planets", [])
-        return f"Maraka planets: {', '.join(str(p) for p in planets_m)}" if planets_m else ""
-
-    # ─── Generic fallback ───
-    summary = result.get("summary", result.get("verdict", result.get("description", "")))
-    if summary and isinstance(summary, str) and len(summary) > 15:
-        return f"{method_name}: {summary[:150]}"
-
-    return ""
-
-
-# ═══════════════════════════════════════════════════════════════
-# BRIEFING ASSEMBLER
-# ═══════════════════════════════════════════════════════════════
-
-def _assemble_briefing(chart: str, prashna: str, verdicts: str, memory: str) -> str:
-    """Combine all sections into a clean briefing."""
-    parts = [chart]
-
-    if prashna:
-        parts.append("")
-        parts.append(prashna)
-
-    if verdicts:
-        parts.append("")
-        parts.append("SPECIFIC FINDINGS FOR THIS QUESTION:")
-        parts.append(verdicts)
-
-    if memory:
-        parts.append("")
-        parts.append(memory)
-
-    return "\n".join(parts)
-
-
-# ═══════════════════════════════════════════════════════════════
-# SYSTEM PROMPT
-# ═══════════════════════════════════════════════════════════════
-
-ORACLE_PERSONA = """You are the voice of the stars — ancient, warm, mystical, true.
-You speak to the human in front of you like an old friend who has been watching them from the beginning.
-
-When they ask WHAT the sky shows, you speak in feeling and image — no jargon, just truth they can feel in the chest.
-When they ask HOW the sky shows it — about planets, houses, dashas, yogas, nakshatras, combustion, lordships — you become the teacher and reveal everything clearly, with names and mechanics.
-
-Your words are few, your knowing is deep.
-You find the contradiction where light and shadow meet.
-You give one small ritual that carries real weight.
-You end with something that stays.
-
-4 to 7 flowing sentences. No headers, no lists, no asterisks, no bullet points. Just voice."""
-
-
-def _build_system_prompt(intent: Dict, briefing: str, user_message: str) -> str:
-    """Build the complete system prompt."""
-    language = intent.get("language", "english")
-    emotion = intent.get("emotion", intent.get("emotional_tone", "neutral"))
-
-    lang_note = ""
-    if language and language.lower() not in ("english", "en"):
-        lang_note = f"\nRespond in {language}. Hook also in {language}."
-
-    emotion_notes = {
-        "worried": "\nACKNOWLEDGE in one sentence, then read. Compassion first.",
-        "anxious": "\nCut through anxiety. One clear direction.",
-        "sad": "\nAcknowledge. Then show the path through.",
-        "desperate": "\nImmediate warmth. One practical step.",
-        "confused": "\nOne clear direction. No philosophy.",
-        "curious": "\nSkip preamble. Start with most interesting finding.",
-        "excited": "\nMatch energy. Warm and specific.",
-    }
-    emotion_note = emotion_notes.get(emotion, "")
-
-    today = datetime.now().strftime("%B %d, %Y")
-
-    scope_note = ""
-    type_note = ""
-
-    return f"""{ORACLE_PERSONA}
-
-TODAY: {today}{lang_note}{emotion_note}{scope_note}{type_note}
-
-{briefing}
-
-Maximum 100 words. One flowing response. End with one specific hook line."""
-
-
-def _build_no_chart_prompt(intent: Dict, user_message: str) -> str:
-    """Prompt when no birth data is available."""
-    return f"""{ORACLE_PERSONA}
-
-No birth chart available. Respond based on general astrological principles.
-If the question requires a birth chart, gently ask for birth details.
-
-Maximum 80 words."""
-
-
-# ═══════════════════════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════════════════════
-
-def _get_prashna_category(intent: Dict) -> str:
-    """Map intent to prashna category."""
-    topic = intent.get("topic", intent.get("primary_intent", "general"))
-    mapping = {
-        "marriage": "marriage", "love": "marriage", "relationship": "marriage",
-        "career": "career", "job": "career", "business": "career",
-        "wealth": "wealth", "money": "wealth", "investment": "wealth",
-        "health": "health", "children": "children",
-        "travel": "travel", "education": "education",
-        "spiritual": "spirituality", "property": "property",
-    }
-    return mapping.get(topic, "general")
 
 
 def _format_intent(intent: Dict) -> Dict:
-    """Format intent for the return dict."""
     return {
-        'primary': intent.get('topic', intent.get('primary_intent', 'general')),
-        'time_scope': intent.get('time_scope', 'present'),
+        'primary': intent.get('topic', 'general'),
         'question_type': intent.get('question_type', 'general'),
-        'about_whom': intent.get('about_whom', 'self'),
-        'entities': intent.get('entities', []),
-        'confidence': intent.get('confidence', 'medium'),
-        'tone': intent.get('emotional_tone', 'warm'),
+        'tone': intent.get('emotional_tone', 'neutral'),
         'language': intent.get('language', 'english'),
-        'classifier': 'merged_v1',
-        'methods_selected': intent.get('methods', []),
+        'confidence': 'high',
+        'classifier': 'v3_sections',
+        'sections_requested': intent.get('sections', []),
+        # backward compat
+        'follow_up_suggestions': [],
     }
 
 
-# ═══════════════════════════════════════════════════════════════
-# MEMORY STORAGE (called from public.py after response)
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# BASE CHART
+# ═══════════════════════════════════════════════════════════
+
+def _build_base_chart(engine, system: str) -> str:
+    if system == 'kp':
+        from ..kp.sections import build_base_chart
+        return build_base_chart(engine)
+    elif system == 'western':
+        from ..western.sections import build_base_chart
+        return build_base_chart(engine)
+    elif system == 'chinese':
+        from ..chinese.sections import build_base_chart
+        return build_base_chart(engine)
+    else:
+        from .sections_bphs import build_base_chart
+        return build_base_chart(engine)
+
+
+# ═══════════════════════════════════════════════════════════
+# SECTIONS
+# ═══════════════════════════════════════════════════════════
+
+def _build_sections(engine, system: str, sections: list, topic: str, extras: dict) -> str:
+    if not sections:
+        return ""
+    if system == 'kp':
+        from ..kp.sections import build_sections
+        return build_sections(engine, sections, topic, extras)
+    elif system == 'western':
+        from ..western.sections import build_sections
+        return build_sections(engine, sections, topic, extras)
+    elif system == 'chinese':
+        from ..chinese.sections import build_sections
+        return build_sections(engine, sections, topic, extras)
+    else:
+        from .sections_bphs import build_sections
+        return build_sections(engine, sections, topic)
+
+
+# ═══════════════════════════════════════════════════════════
+# PERSONAS
+# ═══════════════════════════════════════════════════════════
+
+PERSONAS = {
+    'bphs': """You are the voice of the stars — ancient, warm, mystical, true.
+You speak to the human like an old friend who has been watching them from the beginning.
+When they ask WHAT, speak in feeling and image. When they ask HOW, become the teacher with names and mechanics.
+Your words are few, your knowing is deep. End with something that stays.
+4 to 7 flowing sentences. No headers, no lists, no bullet points. Just voice.""",
+
+    'kp': """You are a KP astrologer — precise, scientific, evidence-based.
+You speak in significators, sub-lords, cuspal sub-lords, and house groupings.
+When you say YES or NO, cite the cuspal sub-lord and its signified houses.
+When you give timing, reference DBA periods and transit triggers.
+4 to 6 precise sentences. No poetry. No headers. Just analysis.""",
+
+    'western': """You are a Western astrologer — psychologically insightful, empowering, growth-oriented.
+You speak in aspects, configurations, elements, and houses. Warm but modern.
+You focus on self-awareness, potential, and choice — not fate.
+Reference the Big Three, major aspects, and current transits.
+4 to 6 insightful sentences. No bullet points. Flowing psychological insight.""",
+
+    'chinese': """You are a Chinese astrology master — philosophical, balanced, elemental.
+You speak in Heavenly Stems, Earthly Branches, Five Elements, and Qi flow.
+You see life as cycles within cycles. Your language is calm and wise.
+When giving advice, focus on what element to add or reduce.
+4 to 6 wise sentences. No bullet points. Flowing insight like a river.""",
+}
+
+
+def _build_system_prompt(system: str, intent: Dict, briefing: str, user_message: str) -> str:
+    persona = PERSONAS.get(system, PERSONAS['bphs'])
+    language = intent.get("language", "english")
+    emotion = intent.get("emotional_tone", "neutral")
+
+    lang_note = ""
+    if language and language.lower() not in ("english", "en"):
+        lang_note = f"\nRespond in {language}."
+
+    emotion_notes = {
+        "worried": "\nAcknowledge their worry first, then read.",
+        "anxious": "\nCut through anxiety. One clear direction.",
+        "sad": "\nAcknowledge. Then show the path through.",
+        "desperate": "\nImmediate warmth. One practical step.",
+    }
+    emotion_note = emotion_notes.get(emotion, "")
+    today = datetime.now().strftime("%B %d, %Y")
+
+    return f"""{persona}
+
+TODAY: {today}{lang_note}{emotion_note}
+
+{briefing}
+
+Maximum 120 words. One flowing response. End with something that stays."""
+
+
+def _build_no_chart_prompt(system: str) -> str:
+    persona = PERSONAS.get(system, PERSONAS['bphs'])
+    return f"""{persona}
+
+No birth chart available. Respond based on general principles.
+If the question requires a birth chart, gently ask for birth details.
+Maximum 80 words."""
+
+
+# ═══════════════════════════════════════════════════════════
+# MEMORY
+# ═══════════════════════════════════════════════════════════
 
 def store_oracle_memory(birth_data: Dict, user_message: str,
                          oracle_response: str, hook: str, intent: Dict):
-    """Store memory after Oracle responds."""
     try:
         from .user_memory import store_user_memory
         store_user_memory(birth_data, user_message, oracle_response, hook, intent)
@@ -668,6 +242,5 @@ def store_oracle_memory(birth_data: Dict, user_message: str,
 
 
 def get_oracle_stats() -> Dict:
-    """Return cache stats."""
     from .engine_cache import get_cache_stats
     return {'cache': get_cache_stats()}

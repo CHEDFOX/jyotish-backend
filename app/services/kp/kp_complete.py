@@ -67,8 +67,10 @@ class KPComplete:
 
     def get_placidus_cusps(self) -> Dict:
         """
-        Calculate Placidus house cusps (the proper KP cusp system).
-        Falls back to equal house if Placidus fails (extreme latitudes).
+        Calculate Placidus house cusps using KP Ayanamsa (not Lahiri).
+        KP ayanamsa = Krishnamurti ayanamsa (swe.SIDM_KRISHNAMURTI = 5).
+        We calculate tropical cusps and subtract KP ayanamsa manually
+        to avoid interfering with the Vedic engine's global ayanamsa state.
         """
         if self._cusps is not None:
             return self._cusps
@@ -76,16 +78,22 @@ class KPComplete:
         try:
             from ..core.ephemeris import swe
             jd = self.engine.ephemeris.get_julian_day(self.engine.birth_dt)
-            flags = swe.FLG_SIDEREAL
 
-            # Placidus = 'P'
-            houses, angles = swe.houses_ex(
-                jd, self.engine.latitude, self.engine.longitude, b'P', flags
+            # Get TROPICAL Placidus cusps (no sidereal flag)
+            houses, angles = swe.houses(
+                jd, self.engine.latitude, self.engine.longitude, b'P'
             )
+
+            # Calculate KP ayanamsa (Krishnamurti = sid_mode 5)
+            old_sid = swe.get_ayanamsa_ut(jd)  # Save current
+            swe.set_sid_mode(5)  # SIDM_KRISHNAMURTI
+            kp_ayanamsa = swe.get_ayanamsa_ut(jd)
+            swe.set_sid_mode(1)  # Restore Lahiri
 
             cusps = {}
             for i in range(12):
-                cusp_long = houses[i]
+                # Subtract KP ayanamsa from tropical cusp
+                cusp_long = (houses[i] - kp_ayanamsa) % 360
                 rashi = int(cusp_long / 30) % 12
                 nak_index = int(cusp_long / (360 / 27)) % 27
                 cusps[i + 1] = {
@@ -97,6 +105,7 @@ class KPComplete:
                     'nakshatra_lord': NAKSHATRA_LORDS[nak_index],
                     'sub_lord': self._get_sub_lord(cusp_long),
                     'sub_sub_lord': self._get_sub_sub_lord(cusp_long),
+                    'ayanamsa_used': 'KP (Krishnamurti)',
                 }
 
             self._cusps = cusps
@@ -467,15 +476,126 @@ class KPComplete:
 
         return {
             'system': 'Krishnamurti Paddhati (Complete)',
+            'ayanamsa': 'KP (Krishnamurti)',
             'cusps': cusps,
             'planet_significators': planet_sigs,
             'event_analysis': events,
             'ruling_planets': rp,
+            'untenanted': self.get_untenanted_houses(),
+            'fortuna': self.get_kp_fortuna(),
             'summary': {
                 'promised_events': [e for e, d in events.items() if 'PROMISED' in d['verdict']],
                 'denied_events': [e for e, d in events.items() if d['verdict'] == 'DENIED'],
                 'uncertain_events': [e for e, d in events.items() if d['verdict'] == 'UNCERTAIN'],
             },
+        }
+
+    # ═══════════════════════════════════════════════════════════════════
+    # UNTENANTED HOUSE LOGIC
+    # ═══════════════════════════════════════════════════════════════════
+
+    def get_untenanted_houses(self) -> Dict:
+        """
+        KP Rule: When a house has NO planet occupying it, the house is 'untenanted'.
+        Signification goes ONLY through the owner of the sign on the cusp.
+        This changes the significator chain significantly.
+        """
+        occupied = set()
+        for name, data in self.planets.items():
+            if name not in ('Ascendant',):
+                occupied.add(data.get('house', 0))
+
+        untenanted = []
+        for h in range(1, 13):
+            if h not in occupied:
+                cusps = self.get_placidus_cusps()
+                cusp_data = cusps.get(h, {})
+                cusp_rashi = cusp_data.get('rashi', 0)
+                owner = RASHI_LORDS.get(RASHI_NAMES[cusp_rashi], '')
+                csl = cusp_data.get('sub_lord', '')
+                untenanted.append({
+                    'house': h,
+                    'sign_on_cusp': cusp_data.get('rashi_name', ''),
+                    'owner': owner,
+                    'cusp_sub_lord': csl,
+                    'note': f'H{h} untenanted — signified only through owner {owner} and CSL {csl}',
+                })
+
+        return {
+            'untenanted_houses': [u['house'] for u in untenanted],
+            'tenanted_houses': sorted(occupied),
+            'details': untenanted,
+        }
+
+    # ═══════════════════════════════════════════════════════════════════
+    # FRUITFUL / BARREN SIGNS
+    # ═══════════════════════════════════════════════════════════════════
+
+    FRUITFUL_SIGNS = {'Cancer', 'Scorpio', 'Pisces'}  # Water signs
+    SEMI_FRUITFUL = {'Taurus', 'Libra', 'Sagittarius', 'Capricorn', 'Aquarius'}
+    BARREN_SIGNS = {'Aries', 'Gemini', 'Leo', 'Virgo'}
+
+    def check_fruitfulness(self, house: int = 5) -> Dict:
+        """
+        KP fruitful/barren check — important for childbirth (H5) and marriage (H7).
+        If the cusp sub-lord is in a barren sign, the event is weakened.
+        """
+        cusps = self.get_placidus_cusps()
+        cusp_data = cusps.get(house, {})
+        csl = cusp_data.get('sub_lord', '')
+        csl_data = self.planets.get(csl, {})
+        csl_sign = csl_data.get('rashi_name', '')
+
+        if csl_sign in self.FRUITFUL_SIGNS:
+            fertility = 'Fruitful'
+            strength = 'Strong support for the event'
+        elif csl_sign in self.BARREN_SIGNS:
+            fertility = 'Barren'
+            strength = 'Weakened — event may be delayed or denied'
+        else:
+            fertility = 'Semi-fruitful'
+            strength = 'Moderate support'
+
+        return {
+            'house': house,
+            'cusp_sub_lord': csl,
+            'csl_sign': csl_sign,
+            'fertility': fertility,
+            'strength': strength,
+        }
+
+    # ═══════════════════════════════════════════════════════════════════
+    # KP FORTUNA (Part of Fortune)
+    # ═══════════════════════════════════════════════════════════════════
+
+    def get_kp_fortuna(self) -> Dict:
+        """
+        KP Part of Fortune = ASC + Moon - Sun (sidereal, KP ayanamsa).
+        Used as an additional significator point.
+        """
+        asc_long = self.asc_longitude
+        sun_long = self.planets.get('Sun', {}).get('longitude', 0)
+        moon_long = self.planets.get('Moon', {}).get('longitude', 0)
+
+        # Day/night check
+        sun_house = self.planets.get('Sun', {}).get('house', 1)
+        if sun_house <= 6:  # Day chart
+            fortuna = (asc_long + moon_long - sun_long) % 360
+        else:  # Night chart
+            fortuna = (asc_long + sun_long - moon_long) % 360
+
+        rashi = int(fortuna / 30) % 12
+        nak_index = int(fortuna / (360 / 27)) % 27
+        house = ((rashi - self.asc_rashi) % 12) + 1
+
+        return {
+            'longitude': round(fortuna, 4),
+            'sign': RASHI_NAMES[rashi],
+            'house': house,
+            'nakshatra': NAKSHATRA_NAMES[nak_index],
+            'star_lord': NAKSHATRA_LORDS[nak_index],
+            'sub_lord': self._get_sub_lord(fortuna),
+            'interpretation': f'Fortuna in H{house} ({RASHI_NAMES[rashi]}) — where material fortune flows',
         }
 
 

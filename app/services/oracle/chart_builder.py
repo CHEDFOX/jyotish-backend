@@ -158,18 +158,20 @@ def build_organized_chart(engine) -> str:
 def build_prashna_section(engine, category: str = "general") -> str:
     """Cast prashna for this moment and return a compact verdict."""
     try:
-        from .consultation_engine import _cast_prashna
-        pr = _cast_prashna(engine, category)
-        verdict = pr.get("verdict", "unavailable")
-        conf = pr.get("confidence_pct", 0)
-        timing = pr.get("timing", "unclear")
-        reasons = pr.get("reasoning", [])[:3]
+        pr = engine.cast_prashna_refined(category)
+        refined = pr.get("refined_verdict", pr.get("basic_prashna", {}))
+        if not isinstance(refined, dict):
+            refined = {}
+        verdict = refined.get("verdict", "unavailable")
+        conf = refined.get("confidence_pct", 0)
+        timing = refined.get("timing", "unclear")
+        reasons = refined.get("reasoning", [])[:3]
         lines = [
             f"PRASHNA (this moment): {verdict} ({conf}% confidence)",
             f"  Timing: {timing}",
         ]
-        if reasons:
-            lines.append("  Factors: " + "; ".join(reasons))
+        if isinstance(reasons, list) and reasons:
+            lines.append("  Factors: " + "; ".join(str(r) for r in reasons))
         return "\n".join(lines)
     except Exception:
         return ""

@@ -22,6 +22,9 @@ class ChatRequest(BaseModel):
     birth_data: Optional[dict] = None
     language: Optional[str] = "en"
     history: Optional[list] = []
+    system: Optional[str] = "bphs"  # "bphs" | "kp" | "western" | "chinese"
+    gender: Optional[str] = None     # "male" | "female" — used by Chinese Da Yun
+    kp_number: Optional[int] = None  # 1-249 — used by KP Horary
 
     @field_validator("message")
     @classmethod
@@ -128,6 +131,25 @@ async def oracle_chat(request_body: ChatRequest, request: Request):
         if not birth_data and request_body.birth_data:
             birth_data = request_body.birth_data
 
+        # Rewrite portrait from previous session if needed
+        if birth_data:
+            try:
+                from app.services.oracle.portrait import get_session_buffer, rewrite_portrait_sync
+                buf = get_session_buffer(birth_data)
+                if buf and buf.get('exchanges'):
+                    # Check if last exchange was >10 min ago (new session)
+                    from datetime import datetime as dt_check
+                    last_started = buf.get('last_exchange', buf.get('started', ''))
+                    if last_started:
+                        last_dt = dt_check.fromisoformat(last_started)
+                        gap = (dt_check.now() - last_dt).total_seconds()
+                        if gap > 600:  # 10 minutes = new session
+                            rewrite_portrait_sync(
+                                birth_data, settings.OPENROUTER_API_KEY, settings.OPENROUTER_MODEL
+                            )
+            except Exception:
+                pass
+
         # Build conversation history
         history = []
         if request_body.history:
@@ -140,95 +162,47 @@ async def oracle_chat(request_body: ChatRequest, request: Request):
             request_body.message,
             birth_data,
             history,
+            system=request_body.system or "bphs",
+            extras={
+                'gender': request_body.gender,
+                'kp_number': request_body.kp_number,
+            },
         )
 
 
         system_prompt = oracle_result['system_prompt']
         briefing = oracle_result.get('data_packet', {}).get('oracle_briefing', '')
 
-        # Check if Python wrote a response
-        python_response = ''
-        hook_facts = ''
-        hook_direction = ''
-
-        if 'RESPONSE (output this EXACTLY' in briefing:
-            parts = briefing.split('RESPONSE (output this EXACTLY, then add hook):')
-            if len(parts) > 1:
-                response_part = parts[1]
-                if 'KEY FACTS FOR HOOK:' in response_part:
-                    python_response = response_part.split('KEY FACTS FOR HOOK:')[0].strip()
-                    remainder = response_part.split('KEY FACTS FOR HOOK:')[1]
-                    if 'HOOK DIRECTION:' in remainder:
-                        hook_facts = remainder.split('HOOK DIRECTION:')[0].strip()
-                        hook_direction = remainder.split('HOOK DIRECTION:')[1].strip()
-                    else:
-                        hook_facts = remainder.strip()
-                else:
-                    python_response = response_part.strip()
-
-        import sys
-        if False and python_response:
-            # Python wrote the response — LLM only generates hook
-            hook_prompt = "Generate ONE hook line for an astrology reading about " + oracle_result['intent']['primary'] + ". "
-            hook_prompt += "Facts: " + hook_facts + ". "
-            hook_prompt += "Direction: " + hook_direction + ". "
-            hook_prompt += "Write ONE line starting with I notice or There is or Interestingly that teases something specific. Do NOT ask a question. Just one line."
-
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        "https://openrouter.ai/api/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": settings.OPENROUTER_MODEL,
-                            "messages": [{"role": "user", "content": hook_prompt}],
-                            "max_tokens": 60,
-                            "temperature": 0.9,
-                        },
-                        timeout=15.0,
-                    )
-                    if response.status_code == 200:
-                        hdata = response.json()
-                        hook_line = hdata["choices"][0]["message"]["content"].strip().split("\n")[0]
-                        oracle_response = python_response + "\n\n" + hook_line
-                    else:
-                        oracle_response = python_response
-            except Exception:
-                oracle_response = python_response
-        else:
-            # Fallback — full LLM for non-life-event queries
-            api_messages = [{"role": "system", "content": system_prompt}]
-            if request_body.history:
-                for msg in request_body.history[-8:]:
-                    role = msg.get("role", "user")
-                    if role == "oracle":
-                        role = "assistant"
-                    if role in ["user", "assistant"]:
-                        api_messages.append({"role": role, "content": msg.get("content", "")})
-            if not request_body.history or request_body.history[-1].get("content") != request_body.message:
-                api_messages.append({"role": "user", "content": request_body.message})
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": settings.OPENROUTER_MODEL,
-                        "messages": api_messages,
-                        "max_tokens": 500,
-                        "temperature": 0.75,
-                    },
-                    timeout=60.0,
-                )
-                if response.status_code != 200:
-                    raise HTTPException(status_code=502, detail="AI service unavailable")
-                data = response.json()
-                oracle_response = data["choices"][0]["message"]["content"]
+        # ─── Full LLM response ───
+        api_messages = [{"role": "system", "content": system_prompt}]
+        if request_body.history:
+            for msg in request_body.history[-8:]:
+                role = msg.get("role", "user")
+                if role == "oracle":
+                    role = "assistant"
+                if role in ["user", "assistant"]:
+                    api_messages.append({"role": role, "content": msg.get("content", "")})
+        if not request_body.history or request_body.history[-1].get("content") != request_body.message:
+            api_messages.append({"role": "user", "content": request_body.message})
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": api_messages,
+                    "max_tokens": 500,
+                    "temperature": 0.75,
+                },
+                timeout=60.0,
+            )
+            if response.status_code != 200:
+                raise HTTPException(status_code=502, detail="AI service unavailable")
+            data = response.json()
+            oracle_response = data["choices"][0]["message"]["content"]
 
         # Log conversation for research
         try:
@@ -265,6 +239,20 @@ async def oracle_chat(request_body: ChatRequest, request: Request):
             if any(last.startswith(s) for s in hook_starters):
                 oracle_response = parts[0].strip()
                 hook_line = last
+
+        # Track exchange in portrait session buffer
+        try:
+            from app.services.oracle.portrait import add_exchange
+            add_exchange(
+                birth_data,
+                request_body.message,
+                oracle_response,
+                classifier_output=oracle_result.get('intent', {}),
+                sections_used=oracle_result.get('sections_built', []),
+                system=request_body.system or "bphs",
+            )
+        except Exception:
+            pass
 
         # Return response with metadata
         return {
@@ -925,7 +913,7 @@ async def register_push_token(request: Request, body: dict):
 # ═══════════════════════════════════════════════════════════════
 import httpx, os
 
-GOOGLE_PLACES_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "AIzaSyDREL8c7cGEV3R1igFTWHay4IqOJn8-B0k")
+GOOGLE_PLACES_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")
 
 @router.post("/places/autocomplete")
 async def places_search(body: dict):
@@ -1018,14 +1006,14 @@ Reply in {language}. Keep responses focused — 2-4 sentences unless asked for m
         messages.append({"role": role, "content": h.get("content", "")})
     messages.append({"role": "user", "content": message})
 
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
+    api_key = settings.OPENROUTER_API_KEY
 
     async def generate():
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 async with client.stream("POST", "https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"model": "openai/gpt-4o-mini", "messages": messages, "max_tokens": 400, "temperature": 0.8, "stream": True},
+                    json={"model": settings.OPENROUTER_MODEL, "messages": messages, "max_tokens": 400, "temperature": 0.8, "stream": True},
                 ) as resp:
                     full = ""
                     async for line in resp.aiter_lines():
