@@ -46,6 +46,8 @@ from .predictions.planetary_returns import PlanetaryReturns
 from .numerology.core import NumerologyEngine
 from .vastu.vastu import VastuAnalysis
 from .chakra.chakra import ChakraAnalysis
+from .mandala.geodetic_engine import MandalaEngine
+from .mandala.geodetic_engine import MandalaEngine
 from .predictions.career_aptitude import CareerAptitude
 from .predictions.daily_ritual import DailyRitual, Biorhythm
 from .transits.ashtakavarga_transit import AshtakavargaTransit
@@ -445,6 +447,104 @@ class JyotishEngine:
         """Chakra mapping — blocked/overactive energy centers."""
         self._ensure_chart()
         return ChakraAnalysis(self).analyze_chakras()
+
+    # ═══════════════════════════════════════════════════════════════
+    # MANDALA SYSTEM — Geodetic / Locational Astrology
+    # ═══════════════════════════════════════════════════════════════
+
+    def get_power_map(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_power_map()
+
+    def get_best_cities(self, purpose: str = 'overall') -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_best_cities(purpose=purpose)
+
+    def get_here_now(self, lat: float = None, lng: float = None, city_name: str = None) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_here_now(lat=lat, lng=lng, city_name=city_name)
+
+    def get_compass(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_compass()
+
+    def get_relocation(self, city_name: str = None, lat: float = None, lng: float = None) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_relocation(city_name=city_name, lat=lat, lng=lng)
+
+    def get_travel_windows(self, months: int = 6, purpose: str = 'general') -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_travel_windows(months=months, purpose=purpose)
+
+    def get_local_space(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_local_space()
+
+    def get_active_direction(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_active_direction()
+
+    def get_geodetic_zodiac(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_geodetic_zodiac()
+
+    def get_parans(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_parans()
+
+    def get_sacred_sites(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_sacred_sites()
+
+    def get_eclipse_geography(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_eclipse_geography()
+
+    def get_migration_roadmap(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_migration_roadmap()
+
+    def get_time_place_score(self, city_name: str) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_time_place_score(city_name)
+
+    def get_danger_zones(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_danger_zones()
+
+    def get_relationship_geography(self) -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).get_relationship_geography()
+
+    def scan_globe(self, resolution: int = 5, purpose: str = 'overall') -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).scan_globe(resolution=resolution, purpose=purpose)
+
+    def scan_region(self, lat_min: float, lat_max: float, lng_min: float, lng_max: float,
+                    resolution: float = 1, purpose: str = 'overall') -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).scan_region(lat_min, lat_max, lng_min, lng_max, resolution, purpose)
+
+    def analyze_any_point(self, lat: float, lng: float, name: str = '') -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).analyze_any_point(lat, lng, name)
+
+    def get_location_weather(self, city_name=None, country_key=None):
+        self._ensure_chart()
+        return MandalaEngine(self).get_location_weather(city_name=city_name, country_key=country_key)
+
+    def get_country_year(self, country_key=None, year=None):
+        self._ensure_chart()
+        return MandalaEngine(self).get_country_year(country_key=country_key, year=year)
+
+    def get_personal_mundane(self, city_name=None):
+        self._ensure_chart()
+        return MandalaEngine(self).get_personal_mundane(city_name=city_name)
+
+    def analyze_coordinate_mundane(self, lat: float, lng: float, name: str = '') -> Dict:
+        self._ensure_chart()
+        return MandalaEngine(self).analyze_coordinate_mundane(lat, lng, name)
+
 
     def get_career_aptitude(self) -> Dict:
         """Career aptitude percentages across 14 fields."""

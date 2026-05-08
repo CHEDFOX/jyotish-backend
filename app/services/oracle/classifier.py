@@ -60,11 +60,19 @@ na_yin, life_stages, yong_shen, extended_stars, fan_fu_yin,
 dayun_onset, xiao_yun, pillar_overlay, hidden_strength,
 gods_matrix, date_selection, feng_shui, chinese_medical, zi_wei"""
 
+
+MANDALA_SECTIONS = """power_map, best_cities, here_now, compass,
+relocation, travel_windows, local_space, geodetic_zodiac,
+parans, sacred_sites, eclipse_geography, migration_roadmap,
+time_place_score, danger_zones, relationship_geography, active_direction,
+location_weather, country_year, personal_mundane, coordinate_mundane, globe_scan"""
+
 SYSTEM_CATALOGS = {
     'bphs': BPHS_SECTIONS,
     'kp': KP_SECTIONS,
     'western': WESTERN_SECTIONS,
     'chinese': CHINESE_SECTIONS,
+    'mandala': MANDALA_SECTIONS,
 }
 
 
@@ -181,6 +189,8 @@ def _fallback(question: str, system: str = "bphs") -> Dict:
         sections = _western_fallback(q)
     elif system == "chinese":
         sections = _chinese_fallback(q)
+    elif system == "mandala":
+        sections = _mandala_fallback(q)
     else:
         sections = ["dashas_full", "transits", "personality"]
 
@@ -238,6 +248,46 @@ def _western_fallback(q: str) -> list:
         return ["aspects", "configurations", "progressions", "solar_return"]
     return ["aspects", "element_balance", "configurations", "progressions"]
 
+
+
+
+def _mandala_fallback(q: str) -> list:
+    if any(w in q for w in ["love", "partner", "marriage", "relationship", "soulmate"]):
+        return ["relationship_geography", "best_cities", "parans"]
+    elif any(w in q for w in ["danger", "avoid", "risky", "unsafe"]):
+        return ["danger_zones", "best_cities", "relocation"]
+    elif any(w in q for w in ["temple", "pray", "pilgrimage", "spiritual", "sacred", "tirth"]):
+        return ["sacred_sites", "compass", "geodetic_zodiac"]
+
+    elif any(w in q for w in ["migrate", "migration", "life plan", "when to move", "dasha", "phase"]):
+        return ["migration_roadmap", "best_cities", "travel_windows"]
+    elif any(w in q for w in ["state", "rajasthan", "maharashtra", "gujarat", "karnataka", "tamil", "kerala", "punjab", "bengal", "bihar"]):
+        return ["country_year", "location_weather", "coordinate_mundane"]
+    elif any(w in q for w in ["country", "nation", "india", "usa", "america", "uk", "china", "japan", "how will", "forecast", "2025", "2026", "2027"]):
+        return ["country_year", "location_weather", "personal_mundane"]
+    elif any(w in q for w in ["best city", "best", "city", "where should", "move", "relocate", "settle"]):
+        return ["best_cities", "relocation", "compass", "travel_windows"]
+    elif any(w in q for w in ["travel", "trip", "yatra", "journey"]):
+        return ["travel_windows", "compass", "best_cities"]
+    elif any(w in q for w in ["direction", "facing", "vastu", "compass"]):
+        return ["compass", "here_now", "local_space"]
+    elif any(w in q for w in ["here", "current", "this place", "location"]):
+        return ["here_now", "coordinate_mundane", "compass"]
+
+
+    elif any(w in q for w in ["eclipse", "grahan"]):
+        return ["eclipse_geography", "power_map"]
+
+    elif any(w in q for w in ["paran", "latitude", "band"]):
+        return ["parans", "power_map"]
+    elif any(w in q for w in ["map", "globe", "world", "scan", "planet"]):
+        return ["globe_scan", "power_map", "geodetic_zodiac"]
+    elif any(w in q for w in ["stock", "market", "bse", "nse", "nyse", "exchange", "bitcoin", "crypto"]):
+        return ["country_year", "location_weather"]
+    elif any(w in q for w in ["nato", "un", "united nations", "brics", "opec", "who", "imf"]):
+        return ["country_year", "location_weather"]
+
+    return ["power_map", "best_cities", "compass", "local_space", "geodetic_zodiac"]
 
 def _chinese_fallback(q: str) -> list:
     if any(w in q for w in ["marry", "relationship", "partner"]):

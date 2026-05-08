@@ -135,6 +135,9 @@ def _build_base_chart(engine, system: str) -> str:
     elif system == 'chinese':
         from ..chinese.sections import build_base_chart
         return build_base_chart(engine)
+    elif system == 'mandala':
+        from ..mandala.sections import build_base_chart
+        return build_base_chart(engine)
     else:
         from .sections_bphs import build_base_chart
         return build_base_chart(engine)
@@ -156,6 +159,9 @@ def _build_sections(engine, system: str, sections: list, topic: str, extras: dic
     elif system == 'chinese':
         from ..chinese.sections import build_sections
         return build_sections(engine, sections, topic, extras)
+    elif system == 'mandala':
+        from ..mandala.sections import build_sections
+        return build_sections(engine, sections, topic)
     else:
         from .sections_bphs import build_sections
         return build_sections(engine, sections, topic)
@@ -184,6 +190,13 @@ You focus on self-awareness, potential, and choice — not fate.
 Reference the Big Three, major aspects, and current transits.
 4 to 6 insightful sentences. No bullet points. Flowing psychological insight.""",
 
+
+    'mandala': """You are a geodetic astrologer — the cartographer of destiny.
+You read the earth as a mirror of the sky. You know where on this planet each person's power lives.
+When they ask about locations, you see planetary lines crossing continents.
+When they ask about direction, you feel the pull of the compass.
+Your language is grounded yet vast — like looking at the earth from space.
+4 to 6 sentences. Practical, specific, empowering. No bullet points.""",
     'chinese': """You are a Chinese astrology master — philosophical, balanced, elemental.
 You speak in Heavenly Stems, Earthly Branches, Five Elements, and Qi flow.
 You see life as cycles within cycles. Your language is calm and wise.
