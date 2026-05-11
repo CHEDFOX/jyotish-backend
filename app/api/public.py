@@ -420,6 +420,1412 @@ async def feature_nakshatra_profile(body: FeatureRequest, request: Request):
     return await _render_feature("nakshatra-profile", body, request)
 
 
+# ═══════════════════════════════════════════════════════════════
+# PLANET DETAIL — Deep single-planet reading with LLM interpretation
+# ═══════════════════════════════════════════════════════════════
+
+class PlanetDetailRequest(BaseModel):
+    planet: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+    @field_validator("planet")
+    @classmethod
+    def planet_valid(cls, v):
+        valid = ['Sun', 'Moon', 'Mars', 'Mercury', 'Jupiter', 'Venus', 'Saturn', 'Rahu', 'Ketu']
+        if v not in valid:
+            raise ValueError(f"Planet must be one of: {', '.join(valid)}")
+        return v
+
+
+@router.post("/planet-detail")
+async def get_planet_detail(request_body: PlanetDetailRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.planet_detail import build_planet_detail, build_llm_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+
+        # Build structured planet data
+        planet_data = build_planet_detail(engine, request_body.planet, request_body.language or 'en')
+
+        if 'error' in planet_data:
+            raise HTTPException(status_code=400, detail=planet_data['error'])
+
+        # Build LLM prompt and get interpretation
+        system_prompt = build_llm_prompt(planet_data, request_body.language or 'en')
+        user_prompt = f"Read {request_body.planet} in my chart."
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": 350,
+                    "temperature": 0.7,
+                },
+                timeout=30.0,
+            )
+
+        interpretation = ""
+        if response.status_code == 200:
+            data = response.json()
+            interpretation = data["choices"][0]["message"]["content"].strip()
+
+        # Split interpretation into three sections
+        about = interpretation
+        significance = ""
+        current_effect = ""
+        parts = [p.strip() for p in interpretation.split("\n\n") if p.strip()]
+        if len(parts) >= 3:
+            about = parts[0]
+            significance = parts[1]
+            current_effect = parts[2]
+        elif len(parts) == 2:
+            about = parts[0]
+            current_effect = parts[1]
+
+        # Remove briefing from response (internal only)
+        planet_data.pop('briefing', None)
+
+        return {
+            'planet_data': planet_data,
+            'about': about,
+            'significance': significance,
+            'current_effect': current_effect,
+            'full_reading': interpretation,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Planet detail error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# LIFE STORY — Complete life chapters
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/life-story")
+async def get_life_story(request_body: FeatureRequest, request: Request):
+    """Return all life chapters (dasha periods) with metadata."""
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.life_story import build_life_story
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        story = build_life_story(engine, request_body.language or 'en')
+
+        story.pop('briefing', None)
+        return story
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Life story error: {str(e)[:200]}")
+
+
+class ChapterReadRequest(BaseModel):
+    chapter_index: int
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+
+@router.post("/life-story/chapter")
+async def get_chapter_reading(request_body: ChapterReadRequest, request: Request):
+    """Get LLM-written reading for a single life chapter."""
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.life_story import build_life_story, build_chapter_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        story = build_life_story(engine, request_body.language or 'en')
+
+        idx = request_body.chapter_index
+        chapters = story.get('chapters', [])
+        if idx < 1 or idx > len(chapters):
+            raise HTTPException(status_code=400, detail=f"Chapter index must be 1-{len(chapters)}")
+
+        chapter = chapters[idx - 1]
+        system_prompt = build_chapter_prompt(chapter, story, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Write chapter {idx}: {chapter['title']}"},
+                    ],
+                    "max_tokens": 250,
+                    "temperature": 0.75,
+                },
+                timeout=30.0,
+            )
+
+        reading = ""
+        if response.status_code == 200:
+            data = response.json()
+            reading = data["choices"][0]["message"]["content"].strip()
+
+        return {
+            'chapter': chapter,
+            'reading': reading,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Chapter reading error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# PAST LIFE — Who you were before
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/past-life")
+async def get_past_life(request_body: FeatureRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.past_life import build_past_life, build_past_life_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        past_data = build_past_life(engine, request_body.language or 'en')
+
+        system_prompt = build_past_life_prompt(past_data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": "Tell me about my past life."},
+                    ],
+                    "max_tokens": 400,
+                    "temperature": 0.8,
+                },
+                timeout=30.0,
+            )
+
+        story_text = ""
+        if response.status_code == 200:
+            data = response.json()
+            story_text = data["choices"][0]["message"]["content"].strip()
+
+        # Split into segments by ---
+        segments = [s.strip() for s in story_text.split('---') if s.strip()]
+        # Ensure we have 5 segments
+        while len(segments) < 5:
+            segments.append('')
+
+        past_data.pop('briefing', None)
+
+        return {
+            'past_life_data': past_data,
+            'segments': segments[:5],
+            'full_story': story_text,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Past life error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# FOUR PILLARS — Kama · Karma · Dharma · Moksha
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/four-pillars")
+async def get_four_pillars(request_body: FeatureRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.four_pillars import build_four_pillars, build_pillars_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_four_pillars(engine, request_body.language or 'en')
+
+        system_prompt = build_pillars_prompt(data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": "Read my four pillars."},
+                    ],
+                    "max_tokens": 450,
+                    "temperature": 0.75,
+                },
+                timeout=30.0,
+            )
+
+        llm_text = ""
+        if response.status_code == 200:
+            resp_data = response.json()
+            llm_text = resp_data["choices"][0]["message"]["content"].strip()
+
+        # Parse LLM response into structured pillars
+        parsed = _parse_pillars_response(llm_text)
+
+        data.pop('briefing', None)
+
+        return {
+            'pillars_data': data['pillars'],
+            'ascendant': data['ascendant'],
+            'readings': parsed,
+            'raw_text': llm_text,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Four pillars error: {str(e)[:200]}")
+
+
+def _parse_pillars_response(text: str) -> dict:
+    """Parse LLM response into per-pillar word + note + closing."""
+    result = {'kama': {}, 'karma': {}, 'dharma': {}, 'moksha': {}, 'closing': ''}
+    current = None
+
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+
+        upper = line.upper()
+        if upper.startswith('KAMA'):
+            current = 'kama'; continue
+        elif upper.startswith('KARMA'):
+            current = 'karma'; continue
+        elif upper.startswith('DHARMA'):
+            current = 'dharma'; continue
+        elif upper.startswith('MOKSHA'):
+            current = 'moksha'; continue
+        elif upper.startswith('CLOSING'):
+            current = 'closing'; continue
+
+        if current == 'closing':
+            result['closing'] = line
+            continue
+
+        if current and current in result and isinstance(result[current], dict):
+            lower = line.lower()
+            if lower.startswith('word:'):
+                result[current]['word'] = line.split(':', 1)[1].strip().rstrip('.')
+            elif lower.startswith('note:'):
+                result[current]['note'] = line.split(':', 1)[1].strip()
+            elif 'note' not in result[current] and 'word' in result[current]:
+                # continuation of note
+                existing = result[current].get('note', '')
+                result[current]['note'] = (existing + ' ' + line).strip() if existing else line
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# TODAY — What the day holds
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/today")
+async def get_today(request_body: FeatureRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.today_sky import build_today, build_today_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        today_data = build_today(engine, request_body.language or 'en')
+
+        system_prompt = build_today_prompt(today_data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": "Tell me about today."},
+                    ],
+                    "max_tokens": 200,
+                    "temperature": 0.7,
+                },
+                timeout=30.0,
+            )
+
+        reading = ""
+        if response.status_code == 200:
+            resp_data = response.json()
+            reading = resp_data["choices"][0]["message"]["content"].strip()
+
+        today_data.pop('briefing', None)
+
+        return {
+            'today': today_data,
+            'reading': reading,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Today error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# KP HOUSE CLOCK — 12 houses via cuspal sub-lord theory
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/kp-house-clock")
+async def get_kp_house_clock(request_body: FeatureRequest, request: Request):
+    """Return all 12 houses with KP analysis."""
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.kp_house_clock import build_kp_house_clock
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_kp_house_clock(engine, request_body.language or 'en')
+
+        data.pop('briefing', None)
+        return data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"KP house clock error: {str(e)[:200]}")
+
+
+class KPHouseReadRequest(BaseModel):
+    house: int
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+    @field_validator("house")
+    @classmethod
+    def house_valid(cls, v):
+        if v < 1 or v > 12:
+            raise ValueError("House must be 1-12")
+        return v
+
+
+@router.post("/kp-house-clock/read")
+async def read_kp_house(request_body: KPHouseReadRequest, request: Request):
+    """Get LLM reading for a single house."""
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.kp_house_clock import build_kp_house_clock, build_house_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_kp_house_clock(engine, request_body.language or 'en')
+
+        houses = data.get('houses', [])
+        idx = request_body.house - 1
+        if idx < 0 or idx >= len(houses):
+            raise HTTPException(status_code=400, detail="Invalid house")
+
+        house_data = houses[idx]
+        system_prompt = build_house_prompt(house_data, houses, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Read house {request_body.house}."},
+                    ],
+                    "max_tokens": 200,
+                    "temperature": 0.7,
+                },
+                timeout=30.0,
+            )
+
+        reading_text = ""
+        if response.status_code == 200:
+            resp = response.json()
+            reading_text = resp["choices"][0]["message"]["content"].strip()
+
+        # Split into 3 parts
+        parts = [p.strip() for p in reading_text.split('---') if p.strip()]
+        while len(parts) < 3:
+            parts.append('')
+
+        return {
+            'house_data': house_data,
+            'life_area_text': parts[0],
+            'verdict_text': parts[1],
+            'insight_text': parts[2],
+            'full_reading': reading_text,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"KP house read error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# KP HORARY — Number-based instant prediction
+# ═══════════════════════════════════════════════════════════════
+
+class KPHoraryRequest(BaseModel):
+    number: int
+    question: Optional[str] = ""
+    category: Optional[str] = "general"
+    kundli_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+    @field_validator("number")
+    @classmethod
+    def number_valid(cls, v):
+        if v < 1 or v > 249:
+            raise ValueError("Number must be 1-249")
+        return v
+
+
+@router.post("/kp-horary")
+async def get_kp_horary(request_body: KPHoraryRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    try:
+        from app.services.features.kp_horary_feature import build_kp_horary, build_horary_prompt
+
+        # Get location from kundli if available
+        lat, lng = 25.35, 74.64
+        if request_body.kundli_data:
+            bd = _extract_birth_data(request_body.kundli_data)
+            if bd:
+                lat = bd.get('lat', lat)
+                lng = bd.get('lng', lng)
+
+        data = build_kp_horary(
+            number=request_body.number,
+            question=request_body.question or '',
+            category=request_body.category or 'general',
+            latitude=lat,
+            longitude=lng,
+        )
+
+        system_prompt = build_horary_prompt(data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Number {request_body.number}. {request_body.question or 'What does the universe say?'}"},
+                    ],
+                    "max_tokens": 150,
+                    "temperature": 0.8,
+                },
+                timeout=30.0,
+            )
+
+        reading = ""
+        if response.status_code == 200:
+            resp = response.json()
+            reading = resp["choices"][0]["message"]["content"].strip()
+
+        data.pop('briefing', None)
+
+        return {
+            'horary': data,
+            'reading': reading,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"KP horary error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# THE WORD — Quick KP yes/no on life topics
+# ═══════════════════════════════════════════════════════════════
+
+class TheWordRequest(BaseModel):
+    topic: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+
+@router.post("/the-word")
+async def get_the_word(request_body: TheWordRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.the_word import build_the_word, build_word_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_the_word(engine, request_body.topic, request_body.language or 'en')
+
+        if 'error' in data:
+            raise HTTPException(status_code=400, detail=data['error'])
+
+        system_prompt = build_word_prompt(data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"The word on {request_body.topic}."},
+                    ],
+                    "max_tokens": 60,
+                    "temperature": 0.8,
+                },
+                timeout=30.0,
+            )
+
+        line = ""
+        if response.status_code == 200:
+            resp = response.json()
+            line = resp["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+
+        data.pop('briefing', None)
+
+        return {
+            'topic': data['topic'],
+            'question': data['question'],
+            'answer': data['answer'],
+            'confidence': data['confidence'],
+            'line': line,
+            'house': data['house'],
+            'csl': data['csl'],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"The word error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# THE BLUNT SEER — Astrological roast
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/blunt-seer")
+async def get_blunt_seer(request_body: FeatureRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.blunt_seer import build_blunt_seer, build_roast_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_blunt_seer(engine, request_body.language or 'en')
+
+        system_prompt = build_roast_prompt(data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": "Roast me."},
+                    ],
+                    "max_tokens": 200,
+                    "temperature": 1.0,
+                },
+                timeout=30.0,
+            )
+
+        roast = ""
+        if response.status_code == 200:
+            resp = response.json()
+            roast = resp["choices"][0]["message"]["content"].strip()
+
+        data.pop('briefing', None)
+
+        return {
+            'seer_data': data,
+            'roast': roast,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Blunt seer error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# WESTERN PLANET — Single planet with all aspects
+# ═══════════════════════════════════════════════════════════════
+
+class WesternPlanetRequest(BaseModel):
+    planet: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+    @field_validator("planet")
+    @classmethod
+    def planet_valid(cls, v):
+        valid = ['Sun', 'Moon', 'Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Pluto']
+        if v not in valid:
+            raise ValueError(f"Planet must be one of: {', '.join(valid)}")
+        return v
+
+
+@router.post("/western-planet")
+async def get_western_planet(request_body: WesternPlanetRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.western_planets import build_western_planet, build_western_planet_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_western_planet(engine, request_body.planet, request_body.language or 'en')
+
+        if 'error' in data:
+            raise HTTPException(status_code=400, detail=data['error'])
+
+        system_prompt = build_western_planet_prompt(data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Read {request_body.planet} and its aspects."},
+                    ],
+                    "max_tokens": 500,
+                    "temperature": 0.7,
+                },
+                timeout=30.0,
+            )
+
+        reading_text = ""
+        if response.status_code == 200:
+            resp = response.json()
+            reading_text = resp["choices"][0]["message"]["content"].strip()
+
+        # Clean LLM label headers
+        import re
+        reading_text = re.sub(r'(?i)^PART\s*\d+\s*[—\-:]+\s*(SIGNIFICANCE|ASPECTS)\s*\n?', '', reading_text, flags=re.MULTILINE).strip()
+
+        # Split into significance + aspects
+        significance = reading_text
+        aspects_text = ""
+        if "===" in reading_text:
+            parts = reading_text.split("===", 1)
+            significance = parts[0].strip()
+            aspects_text = parts[1].strip()
+        else:
+            # LLM often skips ===. Split by finding aspect lines.
+            # Aspect lines match: "{planet} {aspect_word} {other} —"
+            aspect_words = ['conjunct', 'conjunction', 'oppose', 'opposition', 'trine', 'square', 'sextile', 'quincunx', 'semi-square']
+            lines = reading_text.split('\n')
+            sig_lines = []
+            asp_lines = []
+            found_aspects = False
+            planet_lower = request_body.planet.lower()
+            for line in lines:
+                line_lower = line.strip().lower()
+                if not found_aspects and any(
+                    line_lower.startswith(planet_lower) and aw in line_lower
+                    for aw in aspect_words
+                ):
+                    found_aspects = True
+                if found_aspects:
+                    asp_lines.append(line)
+                else:
+                    sig_lines.append(line)
+            if asp_lines:
+                significance = '\n'.join(sig_lines).strip()
+                aspects_text = '\n'.join(asp_lines).strip()
+
+        data.pop('briefing', None)
+
+        return {
+            'planet_data': data,
+            'significance': significance,
+            'aspects_reading': aspects_text,
+            'full_reading': reading_text,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Western planet error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# TIME READING — Today · Week · Month
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/time-reading")
+async def get_time_reading(request_body: FeatureRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.time_reading import build_time_reading, build_time_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_time_reading(engine, request_body.language or 'en')
+
+        system_prompt = build_time_prompt(data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": "Read my time — today, this week, this month."},
+                    ],
+                    "max_tokens": 300,
+                    "temperature": 0.7,
+                },
+                timeout=30.0,
+            )
+
+        reading_text = ""
+        if response.status_code == 200:
+            resp = response.json()
+            reading_text = resp["choices"][0]["message"]["content"].strip()
+
+        # Split into 3 segments
+        segments = [s.strip() for s in reading_text.split('---') if s.strip()]
+        while len(segments) < 3:
+            segments.append('')
+
+        data.pop('briefing', None)
+
+        return {
+            'time_data': data,
+            'today_reading': segments[0],
+            'week_reading': segments[1],
+            'month_reading': segments[2],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Time reading error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# FIVE ELEMENTS — Chinese element wheel
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/five-elements")
+async def get_five_elements(request_body: FeatureRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.five_elements import build_five_elements
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_five_elements(engine, request_body.language or 'en')
+        data.pop('briefing', None)
+        return data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Five elements error: {str(e)[:200]}")
+
+
+class ElementReadRequest(BaseModel):
+    element: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+    @field_validator("element")
+    @classmethod
+    def element_valid(cls, v):
+        valid = ['Wood', 'Fire', 'Earth', 'Metal', 'Water']
+        if v not in valid:
+            raise ValueError(f"Element must be one of: {', '.join(valid)}")
+        return v
+
+
+@router.post("/five-elements/read")
+async def read_element(request_body: ElementReadRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.five_elements import build_five_elements, build_element_prompt
+
+        birth_dt = datetime(
+            birth_data['year'], birth_data['month'], birth_data['day'],
+            birth_data.get('hour', 12), birth_data.get('minute', 0),
+        )
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_five_elements(engine, request_body.language or 'en')
+
+        elem_data = None
+        for e in data.get('elements', []):
+            if e['element'] == request_body.element:
+                elem_data = e
+                break
+        if not elem_data:
+            raise HTTPException(status_code=400, detail="Element not found")
+
+        system_prompt = build_element_prompt(elem_data, data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Tell me about {request_body.element} in my chart."},
+                    ],
+                    "max_tokens": 200,
+                    "temperature": 0.7,
+                },
+                timeout=30.0,
+            )
+
+        reading = ""
+        if response.status_code == 200:
+            resp = response.json()
+            reading = resp["choices"][0]["message"]["content"].strip()
+
+        return {
+            'element_data': elem_data,
+            'reading': reading,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Element read error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# THE ZOO — 4 Chinese pillar animals
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/the-zoo")
+async def get_the_zoo(request_body: FeatureRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.the_zoo import build_the_zoo
+        birth_dt = datetime(birth_data['year'], birth_data['month'], birth_data['day'], birth_data.get('hour', 12), birth_data.get('minute', 0))
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_the_zoo(engine, request_body.language or 'en')
+        data.pop('briefing', None)
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"The zoo error: {str(e)[:200]}")
+
+
+class ZooReadRequest(BaseModel):
+    pillar: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+    @field_validator("pillar")
+    @classmethod
+    def pillar_valid(cls, v):
+        if v not in ['year', 'month', 'day', 'hour']:
+            raise ValueError("Pillar must be year, month, day, or hour")
+        return v
+
+
+@router.post("/the-zoo/read")
+async def read_zoo_animal(request_body: ZooReadRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        from app.services.features.the_zoo import build_the_zoo, build_zoo_prompt
+        birth_dt = datetime(birth_data['year'], birth_data['month'], birth_data['day'], birth_data.get('hour', 12), birth_data.get('minute', 0))
+        engine, _cached = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        data = build_the_zoo(engine, request_body.language or 'en')
+        animal_data = None
+        for a in data.get('animals', []):
+            if a['pillar'] == request_body.pillar:
+                animal_data = a; break
+        if not animal_data:
+            raise HTTPException(status_code=400, detail="Pillar not found")
+        system_prompt = build_zoo_prompt(animal_data, data, request_body.language or 'en')
+        async with httpx.AsyncClient() as client:
+            response = await client.post("https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                json={"model": settings.OPENROUTER_MODEL, "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Read my {request_body.pillar} animal."},
+                ], "max_tokens": 200, "temperature": 0.75}, timeout=30.0)
+        reading = ""
+        if response.status_code == 200:
+            reading = response.json()["choices"][0]["message"]["content"].strip()
+        return {'animal_data': animal_data, 'reading': reading}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Zoo read error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# NAME CORRECTION — Numerological name analysis
+# ═══════════════════════════════════════════════════════════════
+
+class NameCorrectionRequest(BaseModel):
+    name: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+
+@router.post("/name-correction")
+async def get_name_correction(request_body: NameCorrectionRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+    if not request_body.name or len(request_body.name.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Name required")
+
+    try:
+        from app.services.features.name_correction import build_name_correction, build_name_prompt
+        from datetime import date as dt_date
+
+        bd = dt_date(birth_data['year'], birth_data['month'], birth_data['day'])
+        data = build_name_correction(request_body.name.strip(), bd, request_body.language or 'en')
+
+        system_prompt = build_name_prompt(data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post("https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                json={"model": settings.OPENROUTER_MODEL, "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Analyze my name: {request_body.name}"},
+                ], "max_tokens": 250, "temperature": 0.7}, timeout=30.0)
+
+        reading = ""
+        if response.status_code == 200:
+            reading = response.json()["choices"][0]["message"]["content"].strip()
+
+        data.pop('briefing', None)
+        return {'name_data': data, 'reading': reading}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Name correction error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# CORE NUMBERS — All key numerology numbers
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/core-numbers")
+async def get_core_numbers(request_body: NameCorrectionRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+
+    try:
+        from app.services.features.core_numbers import build_core_numbers, build_core_numbers_prompt
+        from datetime import date as dt_date
+
+        bd = dt_date(birth_data['year'], birth_data['month'], birth_data['day'])
+        data = build_core_numbers(bd, request_body.name or '', request_body.language or 'en')
+
+        system_prompt = build_core_numbers_prompt(data, request_body.language or 'en')
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post("https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                json={"model": settings.OPENROUTER_MODEL, "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": "Read my numbers."},
+                ], "max_tokens": 300, "temperature": 0.7}, timeout=30.0)
+
+        reading = ""
+        if response.status_code == 200:
+            reading = response.json()["choices"][0]["message"]["content"].strip()
+
+        data.pop('briefing', None)
+        return {'numbers_data': data, 'reading': reading}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Core numbers error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# BUSINESS NAME — Numerological business name analysis
+# ═══════════════════════════════════════════════════════════════
+
+class BusinessNameRequest(BaseModel):
+    business_name: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+
+@router.post("/business-name")
+async def get_business_name(request_body: BusinessNameRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+    if not request_body.business_name or len(request_body.business_name.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Business name required")
+    try:
+        from app.services.features.business_name import build_business_name, build_business_prompt
+        from datetime import date as dt_date
+        bd = dt_date(birth_data['year'], birth_data['month'], birth_data['day'])
+        data = build_business_name(request_body.business_name.strip(), bd, request_body.language or 'en')
+        system_prompt = build_business_prompt(data, request_body.language or 'en')
+        async with httpx.AsyncClient() as client:
+            response = await client.post("https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                json={"model": settings.OPENROUTER_MODEL, "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Analyze my business name: {request_body.business_name}"},
+                ], "max_tokens": 200, "temperature": 0.7}, timeout=30.0)
+        reading = ""
+        if response.status_code == 200:
+            reading = response.json()["choices"][0]["message"]["content"].strip()
+        data.pop('briefing', None)
+        return {'biz_data': data, 'reading': reading}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Business name error: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# MOBILE NUMBER — Phone number numerology
+# ═══════════════════════════════════════════════════════════════
+
+class MobileNumberRequest(BaseModel):
+    mobile: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = "en"
+
+
+@router.post("/mobile-number")
+async def get_mobile_number(request_body: MobileNumberRequest, request: Request):
+    check_rate_limit(request, "feature", getattr(settings, "RATE_LIMIT_FEATURE", 60))
+    birth_data = _extract_birth_data(request_body.kundli_data)
+    if not birth_data and request_body.birth_data:
+        birth_data = request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail="Birth data required")
+    if not request_body.mobile or len(request_body.mobile.strip()) < 4:
+        raise HTTPException(status_code=400, detail="Mobile number required")
+    try:
+        from app.services.features.mobile_number import build_mobile_number, build_mobile_prompt
+        from datetime import date as dt_date
+        bd = dt_date(birth_data['year'], birth_data['month'], birth_data['day'])
+        data = build_mobile_number(request_body.mobile.strip(), bd, request_body.language or 'en')
+        if 'error' in data:
+            raise HTTPException(status_code=400, detail=data['error'])
+        system_prompt = build_mobile_prompt(data, request_body.language or 'en')
+        async with httpx.AsyncClient() as client:
+            response = await client.post("https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                json={"model": settings.OPENROUTER_MODEL, "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Analyze my number: {request_body.mobile}"},
+                ], "max_tokens": 200, "temperature": 0.7}, timeout=30.0)
+        reading = ""
+        if response.status_code == 200:
+            reading = response.json()["choices"][0]["message"]["content"].strip()
+        data.pop('briefing', None)
+        return {'mobile_data': data, 'reading': reading}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Mobile number error: {str(e)[:200]}")
+
 
 @router.post("/kundli/generate")
 async def generate_kundli(request_body: KundliRequest, request: Request):
@@ -1108,3 +2514,9 @@ async def privacy():
 @router.get("/delete-account")
 async def delete_account():
     return HTMLResponse(open("static/delete.html").read())
+
+
+@router.get("/media-manifest")
+async def media_manifest():
+    from app.services.media_manifest import get_manifest
+    return get_manifest()

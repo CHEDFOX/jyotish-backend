@@ -1,15 +1,6 @@
+venv/
 __pycache__/
 *.pyc
-*.pyo
 .env
-*.backup
-*.save
-*.save.*
-*.log
-*.out
 nohup.out
-.DS_Store
-node_modules/
-venv/
-*.swp
-*.swo
+/tmp/
