@@ -2518,5 +2518,5 @@ async def delete_account():
 
 @router.get("/media-manifest")
 async def media_manifest():
-    from app.services.media_manifest import get_manifest
-    return get_manifest()
+    from app.services.features.media_manifest import _build_manifest; import datetime
+    return {"version": int(datetime.datetime.now().timestamp()), "files": _build_manifest()}

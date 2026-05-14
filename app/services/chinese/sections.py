@@ -326,3 +326,312 @@ SECTION_MAP['date_selection'] = ('DATE SELECTION', _build_date_selection)
 SECTION_MAP['feng_shui'] = ('FENG SHUI DIRECTIONS', _build_feng_shui)
 SECTION_MAP['chinese_medical'] = ('CHINESE MEDICAL (TCM)', _build_chinese_medical)
 SECTION_MAP['zi_wei'] = ('ZI WEI DOU SHU', _build_zi_wei)
+
+# ═══════════════════════════════════════════════════════
+# NEW SECTIONS: Stems/Branches, Loshu, Bagua, Yin-Yang, Lunar Calendar
+# Append this entire block to the end of sections.py
+# ═══════════════════════════════════════════════════════
+
+STEM_DATA = {
+    '甲': {'name': 'Jia', 'element': 'Wood', 'yin_yang': 'Yang', 'meaning': 'Tall tree, pioneer, leader. Growth, ambition, benevolence.', 'body': 'Head, liver, gallbladder', 'color': 'Green'},
+    '乙': {'name': 'Yi', 'element': 'Wood', 'yin_yang': 'Yin', 'meaning': 'Grass, vine, flexible. Gentle, artistic, adaptive.', 'body': 'Neck, liver', 'color': 'Light green'},
+    '丙': {'name': 'Bing', 'element': 'Fire', 'yin_yang': 'Yang', 'meaning': 'Sun, radiance. Passionate, generous, impatient.', 'body': 'Shoulders, heart, small intestine', 'color': 'Red'},
+    '丁': {'name': 'Ding', 'element': 'Fire', 'yin_yang': 'Yin', 'meaning': 'Candle, starlight. Warm, perceptive, detail-oriented.', 'body': 'Heart, eyes', 'color': 'Pink'},
+    '戊': {'name': 'Wu', 'element': 'Earth', 'yin_yang': 'Yang', 'meaning': 'Mountain, fortress. Stable, reliable, stubborn.', 'body': 'Nose, stomach, spleen', 'color': 'Brown'},
+    '己': {'name': 'Ji', 'element': 'Earth', 'yin_yang': 'Yin', 'meaning': 'Garden soil, farmland. Nurturing, meticulous, worrying.', 'body': 'Skin, stomach', 'color': 'Yellow'},
+    '庚': {'name': 'Geng', 'element': 'Metal', 'yin_yang': 'Yang', 'meaning': 'Sword, axe. Decisive, righteous, confrontational.', 'body': 'Chest, lungs, large intestine', 'color': 'White'},
+    '辛': {'name': 'Xin', 'element': 'Metal', 'yin_yang': 'Yin', 'meaning': 'Jewelry, needle. Refined, sensitive, perfectionist.', 'body': 'Lungs, teeth', 'color': 'Silver'},
+    '壬': {'name': 'Ren', 'element': 'Water', 'yin_yang': 'Yang', 'meaning': 'Ocean, river. Resourceful, restless, philosophical.', 'body': 'Legs, kidneys, bladder', 'color': 'Black'},
+    '癸': {'name': 'Gui', 'element': 'Water', 'yin_yang': 'Yin', 'meaning': 'Rain, dew. Intuitive, imaginative, secretive.', 'body': 'Feet, kidneys', 'color': 'Dark blue'},
+}
+
+BRANCH_DATA = {
+    '子': {'name': 'Zi', 'animal': 'Rat', 'element': 'Water', 'yin_yang': 'Yang', 'hours': '23:00-01:00', 'month': 'December', 'direction': 'North', 'season': 'Mid-Winter', 'meaning': 'Clever, resourceful, ambitious. The initiator.'},
+    '丑': {'name': 'Chou', 'animal': 'Ox', 'element': 'Earth', 'yin_yang': 'Yin', 'hours': '01:00-03:00', 'month': 'January', 'direction': 'NNE', 'season': 'Late Winter', 'meaning': 'Patient, dependable, methodical. The builder.'},
+    '寅': {'name': 'Yin', 'animal': 'Tiger', 'element': 'Wood', 'yin_yang': 'Yang', 'hours': '03:00-05:00', 'month': 'February', 'direction': 'ENE', 'season': 'Early Spring', 'meaning': 'Bold, competitive, restless. The warrior.'},
+    '卯': {'name': 'Mao', 'animal': 'Rabbit', 'element': 'Wood', 'yin_yang': 'Yin', 'hours': '05:00-07:00', 'month': 'March', 'direction': 'East', 'season': 'Mid-Spring', 'meaning': 'Gentle, diplomatic, artistic. The peacemaker.'},
+    '辰': {'name': 'Chen', 'animal': 'Dragon', 'element': 'Earth', 'yin_yang': 'Yang', 'hours': '07:00-09:00', 'month': 'April', 'direction': 'ESE', 'season': 'Late Spring', 'meaning': 'Charismatic, powerful, unpredictable. The transformer.'},
+    '巳': {'name': 'Si', 'animal': 'Snake', 'element': 'Fire', 'yin_yang': 'Yin', 'hours': '09:00-11:00', 'month': 'May', 'direction': 'SSE', 'season': 'Early Summer', 'meaning': 'Wise, intuitive, secretive. The strategist.'},
+    '午': {'name': 'Wu', 'animal': 'Horse', 'element': 'Fire', 'yin_yang': 'Yang', 'hours': '11:00-13:00', 'month': 'June', 'direction': 'South', 'season': 'Mid-Summer', 'meaning': 'Free-spirited, passionate, impatient. The adventurer.'},
+    '未': {'name': 'Wei', 'animal': 'Goat', 'element': 'Earth', 'yin_yang': 'Yin', 'hours': '13:00-15:00', 'month': 'July', 'direction': 'SSW', 'season': 'Late Summer', 'meaning': 'Creative, compassionate, indecisive. The artist.'},
+    '申': {'name': 'Shen', 'animal': 'Monkey', 'element': 'Metal', 'yin_yang': 'Yang', 'hours': '15:00-17:00', 'month': 'August', 'direction': 'WSW', 'season': 'Early Autumn', 'meaning': 'Quick-witted, versatile, mischievous. The inventor.'},
+    '酉': {'name': 'You', 'animal': 'Rooster', 'element': 'Metal', 'yin_yang': 'Yin', 'hours': '17:00-19:00', 'month': 'September', 'direction': 'West', 'season': 'Mid-Autumn', 'meaning': 'Precise, proud, observant. The perfectionist.'},
+    '戌': {'name': 'Xu', 'animal': 'Dog', 'element': 'Earth', 'yin_yang': 'Yang', 'hours': '19:00-21:00', 'month': 'October', 'direction': 'WNW', 'season': 'Late Autumn', 'meaning': 'Loyal, honest, protective. The guardian.'},
+    '亥': {'name': 'Hai', 'animal': 'Pig', 'element': 'Water', 'yin_yang': 'Yin', 'hours': '21:00-23:00', 'month': 'November', 'direction': 'NNW', 'season': 'Early Winter', 'meaning': 'Generous, sincere, indulgent. The optimist.'},
+}
+
+LOSHU_MEANINGS = {
+    1: {'name': 'Career', 'element': 'Water', 'direction': 'North', 'trait': 'Communication, independence, drive'},
+    2: {'name': 'Relationships', 'element': 'Earth', 'direction': 'Southwest', 'trait': 'Sensitivity, cooperation, intuition'},
+    3: {'name': 'Family', 'element': 'Wood', 'direction': 'East', 'trait': 'Creativity, expression, optimism'},
+    4: {'name': 'Wealth', 'element': 'Wood', 'direction': 'Southeast', 'trait': 'Order, stability, hard work'},
+    5: {'name': 'Center', 'element': 'Earth', 'direction': 'Center', 'trait': 'Balance, freedom, adaptability'},
+    6: {'name': 'Mentors', 'element': 'Metal', 'direction': 'Northwest', 'trait': 'Responsibility, domestic, love'},
+    7: {'name': 'Children', 'element': 'Metal', 'direction': 'West', 'trait': 'Spirituality, analysis, wisdom'},
+    8: {'name': 'Knowledge', 'element': 'Earth', 'direction': 'Northeast', 'trait': 'Material success, power, ambition'},
+    9: {'name': 'Fame', 'element': 'Fire', 'direction': 'South', 'trait': 'Idealism, ambition, humanitarianism'},
+}
+
+LOSHU_POSITIONS = {4: (0,0), 9: (0,1), 2: (0,2), 3: (1,0), 5: (1,1), 7: (1,2), 8: (2,0), 1: (2,1), 6: (2,2)}
+
+TRIGRAMS = {
+    'qian':  {'chinese': '乾', 'name': 'Qian (Heaven)', 'element': 'Metal', 'direction': 'NW', 'family': 'Father', 'body': 'Head', 'trait': 'Creative, strong, leading', 'season': 'Late Autumn', 'number': 6, 'lines': '☰'},
+    'kun':   {'chinese': '坤', 'name': 'Kun (Earth)', 'element': 'Earth', 'direction': 'SW', 'family': 'Mother', 'body': 'Abdomen', 'trait': 'Receptive, nurturing, devoted', 'season': 'Late Summer', 'number': 2, 'lines': '☷'},
+    'zhen':  {'chinese': '震', 'name': 'Zhen (Thunder)', 'element': 'Wood', 'direction': 'E', 'family': 'Eldest Son', 'body': 'Feet', 'trait': 'Arousing, initiative, decisive', 'season': 'Spring', 'number': 3, 'lines': '☳'},
+    'xun':   {'chinese': '巽', 'name': 'Xun (Wind)', 'element': 'Wood', 'direction': 'SE', 'family': 'Eldest Daughter', 'body': 'Thighs', 'trait': 'Gentle, penetrating, persistent', 'season': 'Late Spring', 'number': 4, 'lines': '☴'},
+    'kan':   {'chinese': '坎', 'name': 'Kan (Water)', 'element': 'Water', 'direction': 'N', 'family': 'Middle Son', 'body': 'Ears', 'trait': 'Abysmal, deep, dangerous, wise', 'season': 'Winter', 'number': 1, 'lines': '☵'},
+    'li':    {'chinese': '離', 'name': 'Li (Fire)', 'element': 'Fire', 'direction': 'S', 'family': 'Middle Daughter', 'body': 'Eyes', 'trait': 'Clinging, bright, illuminating', 'season': 'Summer', 'number': 9, 'lines': '☲'},
+    'gen':   {'chinese': '艮', 'name': 'Gen (Mountain)', 'element': 'Earth', 'direction': 'NE', 'family': 'Youngest Son', 'body': 'Hands', 'trait': 'Still, meditative, stubborn', 'season': 'Late Winter', 'number': 8, 'lines': '☶'},
+    'dui':   {'chinese': '兌', 'name': 'Dui (Lake)', 'element': 'Metal', 'direction': 'W', 'family': 'Youngest Daughter', 'body': 'Mouth', 'trait': 'Joyous, open, expressive', 'season': 'Autumn', 'number': 7, 'lines': '☱'},
+}
+
+ELEMENT_TO_TRIGRAM = {
+    'Wood': ['zhen', 'xun'], 'Fire': ['li'], 'Earth': ['kun', 'gen'], 'Metal': ['qian', 'dui'], 'Water': ['kan'],
+}
+
+BAGUA_LIFE_AREAS = {
+    'kan': 'Career & Life Path', 'kun': 'Love & Relationships', 'zhen': 'Family & Health',
+    'xun': 'Wealth & Abundance', 'li': 'Fame & Reputation', 'qian': 'Mentors & Travel',
+    'dui': 'Children & Creativity', 'gen': 'Knowledge & Wisdom',
+}
+
+HEAVENLY_STEMS_CYCLE = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']
+EARTHLY_BRANCHES_CYCLE = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥']
+ANIMALS_CYCLE = ['Rat', 'Ox', 'Tiger', 'Rabbit', 'Dragon', 'Snake', 'Horse', 'Goat', 'Monkey', 'Rooster', 'Dog', 'Pig']
+
+
+def _build_stems_branches(engine) -> str:
+    bc = _get_bazi(engine)
+    pillars = bc.get_four_pillars()
+    lines = ["YOUR HEAVENLY STEMS:"]
+    for p in ['year', 'month', 'day', 'hour']:
+        pi = pillars[p]
+        ch = pi['stem'].get('chinese', pi['stem'].get('full', ''))
+        sd = STEM_DATA.get(ch, {})
+        if sd:
+            lines.append(f"  {p.capitalize()} Stem: {ch} ({sd['name']}) | {sd['element']} {sd['yin_yang']}")
+            lines.append(f"    Nature: {sd['meaning']}")
+            lines.append(f"    Body: {sd['body']} | Color: {sd['color']}")
+        else:
+            lines.append(f"  {p.capitalize()} Stem: {pi['stem'].get('full', ch)}")
+    lines.append("")
+    lines.append("YOUR EARTHLY BRANCHES:")
+    for p in ['year', 'month', 'day', 'hour']:
+        pi = pillars[p]
+        ch = pi['branch'].get('chinese', pi['branch'].get('full', ''))
+        bd = BRANCH_DATA.get(ch, {})
+        if bd:
+            lines.append(f"  {p.capitalize()} Branch: {ch} ({bd['name']}) | {bd['animal']} / {bd['element']} {bd['yin_yang']}")
+            lines.append(f"    Hours: {bd['hours']} | Month: {bd['month']} | Direction: {bd['direction']}")
+            lines.append(f"    Nature: {bd['meaning']}")
+        else:
+            lines.append(f"  {p.capitalize()} Branch: {pi['branch'].get('full', ch)} ({pi['branch'].get('animal', '')})")
+        if pi.get('hidden_stems'):
+            lines.append(f"    Hidden stems: {', '.join(pi['hidden_stems'])}")
+    dm = bc.get_day_master()
+    lines.append("")
+    lines.append(f"Day Master: {dm.get('full_name', '')} ({dm.get('chinese', '')})")
+    lines.append(f"  {dm.get('description', '')}")
+    return "\n".join(lines)
+
+
+def _build_loshu(engine) -> str:
+    dt = engine.birth_local
+    digits = []
+    for ch in str(dt.day) + str(dt.month) + str(dt.year):
+        if ch.isdigit() and int(ch) > 0:
+            digits.append(int(ch))
+    counts = {i: 0 for i in range(1, 10)}
+    for d in digits:
+        counts[d] += 1
+
+    lines = ["BIRTH DATE DIGITS: " + ", ".join(str(d) for d in digits)]
+    lines.append("")
+    grid = [[' ', ' ', ' '], [' ', ' ', ' '], [' ', ' ', ' ']]
+    for num, (r, c) in LOSHU_POSITIONS.items():
+        grid[r][c] = str(num) * counts[num] if counts[num] > 0 else '.'
+
+    lines.append("LO SHU GRID:")
+    for row in grid:
+        lines.append(f"  | {row[0]:^3s} | {row[1]:^3s} | {row[2]:^3s} |")
+    lines.append("")
+
+    lines.append("PRESENT NUMBERS:")
+    for n in range(1, 10):
+        if counts[n] > 0:
+            m = LOSHU_MEANINGS[n]
+            lines.append(f"  {n} ({m['name']}, {m['element']}, {m['direction']}): {m['trait']} [count={counts[n]}]")
+
+    absent = [n for n in range(1, 10) if counts[n] == 0]
+    if absent:
+        lines.append("")
+        lines.append("MISSING NUMBERS (karmic lessons):")
+        for n in absent:
+            m = LOSHU_MEANINGS[n]
+            lines.append(f"  {n} ({m['name']}, {m['element']}): {m['trait']} — needs conscious development")
+
+    arrows = []
+    if all(counts[n] > 0 for n in [4, 9, 2]): arrows.append("Intellectual Arrow (4-9-2): strong mind")
+    if all(counts[n] > 0 for n in [3, 5, 7]): arrows.append("Spiritual Arrow (3-5-7): inner strength")
+    if all(counts[n] > 0 for n in [8, 1, 6]): arrows.append("Practical Arrow (8-1-6): action oriented")
+    if all(counts[n] > 0 for n in [4, 3, 8]): arrows.append("Planning Arrow (4-3-8): organized")
+    if all(counts[n] > 0 for n in [9, 5, 1]): arrows.append("Will Arrow (9-5-1): determination")
+    if all(counts[n] > 0 for n in [2, 7, 6]): arrows.append("Action Arrow (2-7-6): manifesting")
+    if all(counts[n] > 0 for n in [4, 5, 6]): arrows.append("Compassion Arrow (4-5-6): empathy")
+    if all(counts[n] > 0 for n in [2, 5, 8]): arrows.append("Determination Arrow (2-5-8): persistence")
+    if arrows:
+        lines.append("")
+        lines.append("ARROWS OF STRENGTH:")
+        for a in arrows: lines.append(f"  -> {a}")
+
+    missing_arrows = []
+    if all(counts[n] == 0 for n in [4, 9, 2]): missing_arrows.append("Arrow of Confusion (no 4-9-2)")
+    if all(counts[n] == 0 for n in [3, 5, 7]): missing_arrows.append("Arrow of Disappointment (no 3-5-7)")
+    if all(counts[n] == 0 for n in [8, 1, 6]): missing_arrows.append("Arrow of Frustration (no 8-1-6)")
+    if missing_arrows:
+        lines.append("")
+        lines.append("ARROWS OF WEAKNESS:")
+        for a in missing_arrows: lines.append(f"  !! {a}")
+
+    return "\n".join(lines)
+
+
+def _build_bagua(engine) -> str:
+    bc = _get_bazi(engine)
+    el = bc.get_element_balance()
+    dm_element = el.get('day_master_element', '')
+    dominant = el.get('dominant_element', '')
+    weakest = el.get('weakest_element', '')
+    favorable = el.get('favorable_element', '')
+
+    lines = ["THE EIGHT TRIGRAMS:"]
+    lines.append("")
+    for key, t in TRIGRAMS.items():
+        lines.append(f"  {t['lines']} {t['chinese']} {t['name']} | {t['element']} | {t['direction']} | {t['family']}")
+        lines.append(f"     Life area: {BAGUA_LIFE_AREAS.get(key, '')} | Body: {t['body']}")
+        lines.append(f"     Quality: {t['trait']}")
+    lines.append("")
+
+    lines.append("YOUR BAGUA PROFILE:")
+    for label, elem in [('Day Master', dm_element), ('Dominant', dominant), ('Weakest', weakest), ('Favorable', favorable)]:
+        trigs = ELEMENT_TO_TRIGRAM.get(elem, [])
+        if trigs:
+            t = TRIGRAMS[trigs[0]]
+            area = BAGUA_LIFE_AREAS.get(trigs[0], '')
+            lines.append(f"  {label} ({elem}): {t['lines']} {t['name']} — {area}")
+    return "\n".join(lines)
+
+
+def _build_yin_yang(engine) -> str:
+    bc = _get_bazi(engine)
+    pillars = bc.get_four_pillars()
+    yin_count = 0
+    yang_count = 0
+    yin_items = []
+    yang_items = []
+
+    for p in ['year', 'month', 'day', 'hour']:
+        pi = pillars[p]
+        stem_ch = pi['stem'].get('chinese', '')
+        branch_ch = pi['branch'].get('chinese', '')
+        sd = STEM_DATA.get(stem_ch, {})
+        bd = BRANCH_DATA.get(branch_ch, {})
+        if sd.get('yin_yang') == 'Yin':
+            yin_count += 1; yin_items.append(f"{p} stem ({stem_ch})")
+        elif sd.get('yin_yang') == 'Yang':
+            yang_count += 1; yang_items.append(f"{p} stem ({stem_ch})")
+        if bd.get('yin_yang') == 'Yin':
+            yin_count += 1; yin_items.append(f"{p} branch ({branch_ch})")
+        elif bd.get('yin_yang') == 'Yang':
+            yang_count += 1; yang_items.append(f"{p} branch ({branch_ch})")
+
+    total = yin_count + yang_count
+    yin_pct = round(yin_count / total * 100) if total else 50
+    yang_pct = 100 - yin_pct
+
+    lines = [f"Yang: {yang_count}/{total} ({yang_pct}%) | Yin: {yin_count}/{total} ({yin_pct}%)"]
+    lines.append("")
+
+    if yang_pct > 65:
+        lines.append("Balance: STRONGLY YANG — Active, outward, assertive energy dominates. Risk: burnout, aggression.")
+    elif yang_pct > 55:
+        lines.append("Balance: SLIGHTLY YANG — Active energy leads with enough receptivity.")
+    elif yin_pct > 65:
+        lines.append("Balance: STRONGLY YIN — Receptive, reflective energy dominates. Risk: passivity, overthinking.")
+    elif yin_pct > 55:
+        lines.append("Balance: SLIGHTLY YIN — Receptive energy leads with enough drive.")
+    else:
+        lines.append("Balance: BALANCED — Rare equilibrium between action and reflection.")
+
+    lines.append("")
+    lines.append("YANG: " + ", ".join(yang_items))
+    lines.append("YIN: " + ", ".join(yin_items))
+
+    dm = bc.get_day_master()
+    dm_ch = dm.get('chinese', '')
+    dm_sd = STEM_DATA.get(dm_ch, {})
+    if dm_sd:
+        lines.append("")
+        pol = dm_sd['yin_yang']
+        lines.append(f"Day Master polarity: {pol}")
+        if pol == 'Yang':
+            lines.append("  Core self is active and outward-moving. You express, lead, and project.")
+        else:
+            lines.append("  Core self is receptive and inward-moving. You absorb, adapt, and refine.")
+    return "\n".join(lines)
+
+
+def _year_stem_branch(year):
+    si = (year - 4) % 10
+    bi = (year - 4) % 12
+    return HEAVENLY_STEMS_CYCLE[si], EARTHLY_BRANCHES_CYCLE[bi], ANIMALS_CYCLE[bi]
+
+def _build_lunar_calendar(engine) -> str:
+    dt = engine.birth_local
+    now = datetime.now()
+    stem_elements = {'甲': 'Wood', '乙': 'Wood', '丙': 'Fire', '丁': 'Fire', '戊': 'Earth', '己': 'Earth', '庚': 'Metal', '辛': 'Metal', '壬': 'Water', '癸': 'Water'}
+
+    bs, bb, ba = _year_stem_branch(dt.year)
+    ns, nb, na = _year_stem_branch(now.year)
+    be = stem_elements.get(bs, '')
+    ne = stem_elements.get(ns, '')
+    bc_pos = ((dt.year - 4) % 60) + 1
+    nc_pos = ((now.year - 4) % 60) + 1
+
+    lines = [f"BIRTH YEAR: {dt.year} — {bs}{bb} ({STEM_DATA.get(bs,{}).get('name','')}-{BRANCH_DATA.get(bb,{}).get('name','')}) {be} {ba}"]
+    lines.append(f"  Sexagenary cycle: {bc_pos}/60")
+    lines.append("")
+    lines.append(f"CURRENT YEAR: {now.year} — {ns}{nb} ({STEM_DATA.get(ns,{}).get('name','')}-{BRANCH_DATA.get(nb,{}).get('name','')}) {ne} {na}")
+    lines.append(f"  Sexagenary cycle: {nc_pos}/60")
+    lines.append("")
+
+    bbi = EARTHLY_BRANCHES_CYCLE.index(bb)
+    nbi = EARTHLY_BRANCHES_CYCLE.index(nb)
+    diff = abs(bbi - nbi)
+    if diff == 6:
+        lines.append(f"CLASH: {ba} clashes with {na}. Year of challenges and forced change.")
+    elif diff in [4, 8]:
+        lines.append(f"HARMONY: {ba} harmonizes with {na}. Supportive year for growth.")
+    elif diff == 0:
+        lines.append(f"SAME ANIMAL: Your zodiac year (Ben Ming Nian). Year of tests. Wear red.")
+    else:
+        lines.append(f"{ba} to {na}: Neutral relationship.")
+
+    lines.append("")
+    lines.append("UPCOMING KEY YEARS:")
+    for offset in [4, 6, 8, 12]:
+        fy = now.year + ((bbi - nbi + offset) % 12)
+        if fy <= now.year: fy += 12
+        fs, fb, fa = _year_stem_branch(fy)
+        fe = stem_elements.get(fs, '')
+        rel = "Harmony" if offset in [4, 8] else "Clash" if offset == 6 else "Same animal"
+        lines.append(f"  {fy}: {fe} {fa} ({rel})")
+    return "\n".join(lines)
+
+
+# Register all 5 new sections
+SECTION_MAP['stems_branches'] = ('HEAVENLY STEMS & EARTHLY BRANCHES', _build_stems_branches)
+SECTION_MAP['loshu_grid'] = ('LOSHU GRID', _build_loshu)
+SECTION_MAP['bagua'] = ('BAGUA — EIGHT TRIGRAMS', _build_bagua)
+SECTION_MAP['yin_yang'] = ('YIN-YANG BALANCE', _build_yin_yang)
+SECTION_MAP['lunar_calendar'] = ('CHINESE LUNAR CALENDAR', _build_lunar_calendar)
