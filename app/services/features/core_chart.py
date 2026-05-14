@@ -251,6 +251,11 @@ async def get_core_chart(request_body: _CoreChartRequest, request: Request):
             r = results[i]
             readings[s] = r if isinstance(r, dict) else {}
 
+        # Extract hook from vedic system for section display
+        vedic_r = readings.get('vedic', {})
+        readings['hook_title'] = vedic_r.get('headline', '')
+        readings['hook_body'] = vedic_r.get(list([k for k in vedic_r if k != 'headline'][:1] or [''])[0], {}).get('what', '') if isinstance(vedic_r, dict) else ''
+        readings['cta_dive'] = vedic_r.get(list([k for k in vedic_r if k != 'headline'][:1] or [''])[0], {}).get('cta_significance', 'Open the wheel') if isinstance(vedic_r, dict) else 'Open the wheel'
         return {'wheels': wheel_data, 'readings': readings}
     except HTTPException:
         raise

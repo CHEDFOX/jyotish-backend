@@ -501,3 +501,64 @@ async def get_compatibility_deep(request_body: _CompatRequest, request: Request)
 
 
 compatibility_deep_router = router
+
+
+# Lightweight hook for compatibility section
+from fastapi import APIRouter as _AR
+
+class _CompatHookReq(BaseModel):
+    kundli_data: Optional[dict] = None
+
+@router.post("/compatibility-hook")
+async def get_compatibility_hook(request_body: _CompatHookReq, request: Request):
+    from app.core.config import settings
+    from app.core.rate_limiter import check_rate_limit
+    import json as json_parse
+    check_rate_limit(request, 'feature', getattr(settings, 'RATE_LIMIT_FEATURE', 60))
+    birth_data = _extract_person(request_body.kundli_data)
+    if not birth_data:
+        raise HTTPException(status_code=400, detail='Birth data required')
+    try:
+        from app.services.oracle.engine_cache import get_cached_engine
+        birth_dt = datetime(birth_data['year'], birth_data['month'], birth_data['day'], birth_data.get('hour', 12), birth_data.get('minute', 0))
+        engine, _ = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        venus = engine.planets.get('Venus', {})
+        moon = engine.planets.get('Moon', {})
+        sun = engine.planets.get('Sun', {})
+        chart_hint = f"Venus in {venus.get('rashi_name','')} H{venus.get('house','')}, Moon in {moon.get('rashi_name','')} H{moon.get('house','')}, Sun in {sun.get('rashi_name','')} H{sun.get('house','')}"
+        prompt = f"""You are the Oracle.
+Make them feel seen. Root the language in human behaviour, psychology, emotions.
+
+This person's love signature: {chart_hint}
+
+Return ONLY valid JSON:
+{{
+  "hook_title": "max 8 words. Persuasive. About THEIR relationship pattern.",
+  "hook_body": "2 sentences. What they secretly want in love but won't say.",
+  "cta_dive": "4-6 words. Make them curious about compatibility."
+}}"""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                headers={'Authorization': f'Bearer {settings.OPENROUTER_API_KEY}', 'Content-Type': 'application/json'},
+                json={'model': settings.OPENROUTER_MODEL, 'messages': [{'role': 'system', 'content': prompt}, {'role': 'user', 'content': 'My love pattern.'}], 'max_tokens': 200, 'temperature': 0.8},
+                timeout=30.0,
+            )
+        if response.status_code != 200:
+            return {'hook_title': '', 'hook_body': '', 'cta_dive': ''}
+        raw = response.json()['choices'][0]['message']['content'].strip()
+        cleaned = raw.replace('```json', '').replace('```', '').strip()
+        try:
+            return json_parse.loads(cleaned)
+        except:
+            s, e = cleaned.find('{'), cleaned.rfind('}')
+            if s >= 0 and e > s:
+                try:
+                    return json_parse.loads(cleaned[s:e+1])
+                except:
+                    pass
+        return {'hook_title': '', 'hook_body': '', 'cta_dive': ''}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {'hook_title': '', 'hook_body': '', 'cta_dive': ''}
