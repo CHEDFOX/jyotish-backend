@@ -17,10 +17,11 @@ from datetime import datetime
 from typing import Dict
 
 
-def process_oracle_query(user_message: str, birth_data: Dict = None,
-                          conversation_history: list = None,
-                          system: str = "bphs",
-                          extras: Dict = None) -> Dict:
+async def process_oracle_query(user_message: str, birth_data: Dict = None,
+                                conversation_history: list = None,
+                                system: str = "bphs",
+                                extras: Dict = None,
+                                astrologer_personality: str = "") -> Dict:
     """Main entry point."""
     start_time = datetime.now()
     extras = extras or {}
@@ -35,21 +36,25 @@ def process_oracle_query(user_message: str, birth_data: Dict = None,
         api_key = None
         model = None
 
-    # ─── Classify ───
+    # ─── Classifier + engine in parallel ───
+    import asyncio
     from .classifier import classify
     history = conversation_history or []
-    intent = classify(user_message, api_key, model, system, history)
 
-    # ─── Engine ───
-    engine = None
-    cache_hit = False
-    if birth_data:
+    async def _classify():
+        return await classify(user_message, api_key, model, system, history)
+
+    async def _engine():
+        if not birth_data:
+            return None, False
         from .engine_cache import get_cached_engine
         birth_dt = datetime(
             birth_data['year'], birth_data['month'], birth_data['day'],
             birth_data.get('hour', 12), birth_data.get('minute', 0)
         )
-        engine, cache_hit = get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+        return get_cached_engine(birth_dt, birth_data['lat'], birth_data['lng'])
+
+    intent, (engine, cache_hit) = await asyncio.gather(_classify(), _engine())
 
     if not engine:
         elapsed = (datetime.now() - start_time).total_seconds() * 1000
@@ -72,14 +77,16 @@ def process_oracle_query(user_message: str, birth_data: Dict = None,
     topic = intent.get("topic", "general")
     sections_text = _build_sections(engine, system, sections, topic, extras)
 
-    # ─── Portrait (replaces old memory) ───
+    # ─── Topic portraits (sharded memory) ───
     portrait_text = ""
     if birth_data:
         try:
-            from .portrait import build_portrait_block
-            portrait_text = build_portrait_block(birth_data)
-        except Exception:
-            pass
+            from .portraits import load_portrait_block
+            primary = intent.get("topic", "general")
+            secondary = intent.get("secondary_topic")
+            portrait_text = load_portrait_block(birth_data, primary, secondary, system=system)
+        except Exception as e:
+            print(f"[Pipeline] Portrait load failed: {e}")
 
     # ─── Assemble ───
     briefing = base_chart
@@ -89,7 +96,7 @@ def process_oracle_query(user_message: str, birth_data: Dict = None,
         briefing += "\n\n" + portrait_text
 
     # ─── System prompt ───
-    system_prompt = _build_system_prompt(system, intent, briefing, user_message)
+    system_prompt = _build_system_prompt(system, intent, briefing, user_message, astrologer_personality)
 
     elapsed = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -110,13 +117,13 @@ def process_oracle_query(user_message: str, birth_data: Dict = None,
 def _format_intent(intent: Dict) -> Dict:
     return {
         'primary': intent.get('topic', 'general'),
+        'secondary': intent.get('secondary_topic'),
         'question_type': intent.get('question_type', 'general'),
         'tone': intent.get('emotional_tone', 'neutral'),
         'language': intent.get('language', 'english'),
         'confidence': 'high',
         'classifier': 'v3_sections',
         'sections_requested': intent.get('sections', []),
-        # backward compat
         'follow_up_suggestions': [],
     }
 
@@ -205,31 +212,37 @@ When giving advice, focus on what element to add or reduce.
 }
 
 
-def _build_system_prompt(system: str, intent: Dict, briefing: str, user_message: str) -> str:
+def _build_system_prompt(system: str, intent: Dict, briefing: str,
+                          user_message: str, astrologer_personality: str = "") -> str:
+    from app.services.voice import voice_card
     persona = PERSONAS.get(system, PERSONAS['bphs'])
     language = intent.get("language", "english")
     emotion = intent.get("emotional_tone", "neutral")
 
-    lang_note = ""
-    if language and language.lower() not in ("english", "en"):
-        lang_note = f"\nRespond in {language}."
+    base_voice = voice_card(language)
+
+    personality_block = ""
+    if astrologer_personality and astrologer_personality.strip():
+        personality_block = f"\n\nUSER-CHOSEN ASTROLOGER STYLE (additive — never overrides the base voice above):\n{astrologer_personality.strip()[:500]}"
 
     emotion_notes = {
-        "worried": "\nAcknowledge their worry first, then read.",
-        "anxious": "\nCut through anxiety. One clear direction.",
-        "sad": "\nAcknowledge. Then show the path through.",
+        "worried":   "\nAcknowledge their worry first, then read.",
+        "anxious":   "\nCut through anxiety. One clear direction.",
+        "sad":       "\nAcknowledge. Then show the path through.",
         "desperate": "\nImmediate warmth. One practical step.",
     }
     emotion_note = emotion_notes.get(emotion, "")
     today = datetime.now().strftime("%B %d, %Y")
 
-    return f"""{persona}
+    return f"""{base_voice}
 
-TODAY: {today}{lang_note}{emotion_note}
+{persona}{personality_block}
+
+TODAY: {today}{emotion_note}
 
 {briefing}
 
-Maximum 120 words. One flowing response. End with something that stays."""
+Maximum 120 words. One flowing response. Speak as if you already know them — never announce "we discussed" or "last time" or "I told you". End with something that stays."""
 
 
 def _build_no_chart_prompt(system: str) -> str:
@@ -244,14 +257,6 @@ Maximum 80 words."""
 # ═══════════════════════════════════════════════════════════
 # MEMORY
 # ═══════════════════════════════════════════════════════════
-
-def store_oracle_memory(birth_data: Dict, user_message: str,
-                         oracle_response: str, hook: str, intent: Dict):
-    try:
-        from .user_memory import store_user_memory
-        store_user_memory(birth_data, user_message, oracle_response, hook, intent)
-    except Exception:
-        pass
 
 
 def get_oracle_stats() -> Dict:

@@ -1,145 +1,151 @@
 """
-THE ZOO — Your 4 animals from the Chinese Four Pillars.
+THE ZOO — Your 4 BaZi animals (year/month/day/hour pillars).
 
-Year animal = social identity (what people think you are)
-Month animal = career/parents energy
-Day animal = true self (inner nature)
-Hour animal = hidden self / children / old age
+Each animal has two pieces:
+  - info: explainer card (what this animal is + what it governs)
+  - reading: personal interpretation
 
-Called by: POST /the-zoo { kundli_data }
+Endpoint: POST /api/public/the-zoo
 """
 
-from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from app.services.voice import voice_card
+from app.services.features._base import (
+    extract_birth, get_engine, call_llm, split_segments,
+)
 
 
-PILLAR_MEANING = {
-    'year':  {'label': 'Year', 'role': 'Your outer mask', 'governs': 'Social identity, grandparents, early childhood', 'ages': '0-16'},
-    'month': {'label': 'Month', 'role': 'Your career self', 'governs': 'Parents, career, how the world uses you', 'ages': '17-32'},
-    'day':   {'label': 'Day', 'role': 'Your true self', 'governs': 'Inner nature, spouse, your real personality', 'ages': '33-48'},
-    'hour':  {'label': 'Hour', 'role': 'Your hidden self', 'governs': 'Children, ambitions, old age, secret desires', 'ages': '49+'},
-}
-
-ANIMAL_NATURE = {
-    'Rat':     {'nature': 'Clever, resourceful, quick-witted. First of the cycle — the initiator.', 'shadow': 'Can be manipulative and hoarding.'},
-    'Ox':      {'nature': 'Patient, reliable, determined. The unstoppable worker.', 'shadow': 'Stubborn to a fault, slow to forgive.'},
-    'Tiger':   {'nature': 'Brave, competitive, magnetic. Born to lead and roar.', 'shadow': 'Reckless, rebellious, hard to contain.'},
-    'Rabbit':  {'nature': 'Gentle, elegant, diplomatic. Sees beauty others miss.', 'shadow': 'Avoids conflict, can be passive-aggressive.'},
-    'Dragon':  {'nature': 'Powerful, lucky, charismatic. The mythical overachiever.', 'shadow': 'Arrogant, demands too much from others.'},
-    'Snake':   {'nature': 'Wise, intuitive, mysterious. Thinks ten moves ahead.', 'shadow': 'Secretive, jealous, cold when threatened.'},
-    'Horse':   {'nature': 'Free, energetic, adventurous. Needs wide open space.', 'shadow': 'Impatient, commitment-phobic, burns out fast.'},
-    'Goat':    {'nature': 'Creative, gentle, empathetic. The artist of the zodiac.', 'shadow': 'Indecisive, dependent, prone to worry.'},
-    'Monkey':  {'nature': 'Witty, inventive, playful. Solves problems nobody else can.', 'shadow': 'Tricky, restless, hard to trust fully.'},
-    'Rooster': {'nature': 'Honest, hardworking, punctual. Says what others think.', 'shadow': 'Critical, vain, can be abrasive.'},
-    'Dog':     {'nature': 'Loyal, honest, protective. The moral compass of the zodiac.', 'shadow': 'Anxious, pessimistic, stubborn about right/wrong.'},
-    'Pig':     {'nature': 'Kind, generous, tolerant. Enjoys life without pretense.', 'shadow': 'Naive, overindulgent, avoids hard truths.'},
-}
+router = APIRouter(prefix="/public", tags=["The Zoo"])
 
 
-def _safe(fn, default=None):
-    try:
-        result = fn()
-        return result if result is not None else default
-    except Exception:
-        return default
+PILLAR_AGES = {'year': '0-16', 'month': '17-32', 'day': '33-48', 'hour': '49+'}
 
 
-def build_the_zoo(engine, language: str = 'en') -> Dict:
-    """Build the 4 animals from BaZi pillars."""
-
+def build_the_zoo(engine) -> Dict:
     from app.services.chinese.bazi import BaZiChart
 
     bazi = BaZiChart(engine.birth_dt)
-    pillars = bazi.get_four_pillars()
+    pillars = bazi.get_four_pillars() or {}
     if not isinstance(pillars, dict): pillars = {}
 
-    year_animal_sign = bazi.get_animal_sign()
-    if not isinstance(year_animal_sign, dict): year_animal_sign = {}
-    year_animal = year_animal_sign.get('animal', '')
+    yd = bazi.get_animal_sign() or {}
+    if not isinstance(yd, dict): yd = {}
+    year_animal = yd.get('animal', '')
 
     animals = []
-    briefing_lines = [f"THE ZOO — 4 Animals\nYear animal (public): {year_animal}\n"]
-
-    for key in ['year', 'month', 'day', 'hour']:
-        p = pillars.get(key, {})
+    for key in ('year', 'month', 'day', 'hour'):
+        p = pillars.get(key, {}) or {}
         if not isinstance(p, dict): p = {}
-
-        branch = p.get('branch', {})
+        branch = p.get('branch', {}) or {}
+        stem = p.get('stem', {}) or {}
         if not isinstance(branch, dict): branch = {}
-        stem = p.get('stem', {})
         if not isinstance(stem, dict): stem = {}
 
-        animal = branch.get('animal', '')
-        animal_element = branch.get('element', '')
-        stem_element = stem.get('element', '')
-        stem_name = stem.get('name', '')
-        chinese = branch.get('chinese', '')
-        polarity = stem.get('polarity', '')
-
-        meta = PILLAR_MEANING.get(key, {})
-        nature = ANIMAL_NATURE.get(animal, {})
-
-        entry = {
+        animals.append({
             'pillar': key,
-            'label': meta.get('label', key),
-            'role': meta.get('role', ''),
-            'governs': meta.get('governs', ''),
-            'ages': meta.get('ages', ''),
-            'animal': animal,
-            'animal_chinese': chinese,
-            'animal_element': animal_element,
-            'stem_element': stem_element,
-            'stem_name': stem_name,
-            'polarity': polarity,
-            'nature': nature.get('nature', ''),
-            'shadow': nature.get('shadow', ''),
-            'full_pillar': f"{polarity} {stem_element} {animal}",
-        }
-        animals.append(entry)
+            'ages': PILLAR_AGES[key],
+            'animal': branch.get('animal', ''),
+            'animal_chinese': branch.get('chinese', ''),
+            'animal_element': branch.get('element', ''),
+            'stem_element': stem.get('element', ''),
+            'stem_name': stem.get('name', ''),
+            'polarity': stem.get('polarity', ''),
+        })
 
-        briefing_lines.append(
-            f"{meta.get('label',key).upper()} PILLAR ({meta.get('role','')}):\n"
-            f"  Animal: {animal} ({chinese}) | Element: {animal_element} | Stem: {polarity} {stem_element}\n"
-            f"  Governs: {meta.get('governs','')}\n"
-            f"  Nature: {nature.get('nature','')}\n"
-            f"  Shadow: {nature.get('shadow','')}\n"
+    return {'animals': animals, 'year_animal': year_animal}
+
+
+def build_zoo_prompt(data: Dict, language: str = 'en') -> str:
+    lines = []
+    for a in data['animals']:
+        lines.append(
+            f"- {a['pillar'].upper()} pillar (ages {a['ages']}): "
+            f"{a['polarity']} {a['stem_element']} {a['animal']} ({a['animal_chinese']}), animal element {a['animal_element']}"
         )
+    pillars_text = '\n'.join(lines)
 
-    return {
-        'animals': animals,
-        'year_animal': year_animal,
-        'briefing': '\n'.join(briefing_lines),
-    }
+    return f"""{voice_card(language)}
+
+You are reading this person's four BaZi animals — Chinese Four Pillars astrology.
+
+Pillar layers:
+- Year  = outer mask, social identity, ages 0-16
+- Month = career and parents, how the world uses them, ages 17-32
+- Day   = TRUE self, spouse, who they really are, ages 33-48
+- Hour  = hidden self, children, legacy, old age, ages 49+
+
+{pillars_text}
+
+For EACH of the 4 pillars (in order: year, month, day, hour), write TWO short pieces:
+
+1. INFO — 2-3 short lines. What this animal IS in BaZi (its archetypal nature combined with the stem element), and what it GOVERNS in THIS pillar position. Factual-mystical, like a museum label. NO "you" pronouns.
+
+2. READING — 4-5 sentences. What this animal in THIS pillar reveals about THIS person. How the stem element shapes it. The strength AND the vulnerability. One surprising truth. Second person ("you").
+
+Total 8 pieces. Separate each piece with exactly ---
+
+Order:
+[year info] --- [year reading] --- [month info] --- [month reading] --- [day info] --- [day reading] --- [hour info] --- [hour reading]
+
+The DAY pillar reading must go deepest — that's who they really are beneath the year-animal mask.
+
+Rules:
+- INFO under 50 words, no "you", reads like an explainer card
+- READING under 80 words, second person, specific to chart
+- No headers, no "year info:" labels in the output
+- Separate with exactly ---"""
 
 
-def build_zoo_prompt(animal_data: Dict, all_data: Dict, language: str = 'en') -> str:
-    """Build LLM prompt for a single pillar animal."""
-    briefing = all_data['briefing']
-    pillar = animal_data['pillar']
-    animal = animal_data['animal']
-    role = animal_data['role']
+class _ZooRequest(BaseModel):
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = 'en'
 
-    lang_note = ''
-    if language and language.lower() not in ('english', 'en'):
-        lang_note = f'\nRespond in {language}.'
 
-    return f"""You are a Chinese astrology master — vivid, warm, a great storyteller.{lang_note}
+@router.post('/the-zoo')
+async def get_the_zoo(request_body: _ZooRequest, request: Request):
+    from app.core.config import settings
+    from app.core.rate_limiter import check_rate_limit
 
-{briefing}
+    check_rate_limit(request, 'feature', getattr(settings, 'RATE_LIMIT_FEATURE', 60))
 
-READING THE {pillar.upper()} ANIMAL: {animal}
-Role: {role}
-Governs: {animal_data['governs']}
-Element: {animal_data['polarity']} {animal_data['stem_element']} {animal}
-Nature: {animal_data['nature']}
-Shadow: {animal_data['shadow']}
+    birth_data = extract_birth(request_body.kundli_data) or request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail='Birth data required')
 
-Write 4-5 sentences about what this {animal} means in the {pillar} position:
-1. What this animal reveals about this part of their life ({role}).
-2. How the element ({animal_data['stem_element']}) modifies this animal's energy.
-3. The strength and the vulnerability this creates.
-4. One surprising truth about having {animal} here.
+    try:
+        engine = get_engine(birth_data)
+        language = request_body.language or 'en'
 
-{f"IMPORTANT: This is the DAY pillar — this is who they REALLY are, not who they show the world. The year animal ({all_data['year_animal']}) is just the mask." if pillar == 'day' else ""}
+        data = build_the_zoo(engine)
+        prompt = build_zoo_prompt(data, language)
+        raw = await call_llm(prompt, settings,
+                             user_message="Read all four animals.",
+                             max_tokens=2200, temperature=0.85)
+        segments = split_segments(raw)
 
-Under 80 words. No jargon. Vivid and specific."""
+        readings = []
+        for i, a in enumerate(data['animals']):
+            info_idx = i * 2
+            reading_idx = i * 2 + 1
+            info = segments[info_idx] if info_idx < len(segments) else ''
+            reading = segments[reading_idx] if reading_idx < len(segments) else ''
+            readings.append({**a, 'info': info, 'reading': reading})
+
+        return {
+            'year_animal': data['year_animal'],
+            'animals': readings,
+            'version': 2,
+            'cache_ttl_seconds': 31536000,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+the_zoo_router = router

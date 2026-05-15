@@ -80,7 +80,8 @@ def build_classifier_prompt(system: str = "bphs") -> str:
     """Build the classifier prompt for a given system."""
     sections = SYSTEM_CATALOGS.get(system, BPHS_SECTIONS)
     return f"""You classify astrology questions. Return JSON with:
-- topic: primary topic
+- topic: primary topic (single word — marriage / career / wealth / health / spirituality / timing / remedies / compatibility / travel / family / personality / general)
+- secondary_topic: optional second topic if the question genuinely spans two areas (e.g. "how does my career affect my marriage" → primary=career, secondary=marriage). null if not needed.
 - question_type: timing / yes_no / why / how_is / what_kind / should_i / general
 - emotional_tone: curious / worried / anxious / sad / desperate / excited / neutral
 - language: english / hindi / hinglish / other
@@ -92,8 +93,8 @@ AVAILABLE SECTIONS:
 Return ONLY valid JSON."""
 
 
-def classify(question: str, api_key: str, model: str,
-             system: str = "bphs", conversation_history: list = None) -> Dict:
+async def classify(question: str, api_key: str, model: str,
+                   system: str = "bphs", conversation_history: list = None) -> Dict:
     """
     Classify a question and pick relevant data sections.
     Returns: topic, question_type, emotional_tone, language, sections[]
@@ -114,20 +115,21 @@ def classify(question: str, api_key: str, model: str,
 
         messages.append({"role": "user", "content": question})
 
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": "Bearer " + api_key,
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": 200,
-                "temperature": 0.1,
-            },
-            timeout=15.0,
-        )
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer " + api_key,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": 200,
+                    "temperature": 0.1,
+                },
+                timeout=15.0,
+            )
 
         if response.status_code != 200:
             return _fallback(question, system)
@@ -146,6 +148,7 @@ def classify(question: str, api_key: str, model: str,
         result.setdefault("question_type", "general")
         result.setdefault("emotional_tone", "neutral")
         result.setdefault("language", "english")
+        result.setdefault("secondary_topic", None)
 
         # Validate sections are strings
         if not isinstance(result["sections"], list) or len(result["sections"]) < 1:
@@ -206,6 +209,7 @@ def _fallback(question: str, system: str = "bphs") -> Dict:
 
     return {
         "topic": topic,
+        "secondary_topic": None,
         "question_type": question_type,
         "emotional_tone": tone,
         "language": language,

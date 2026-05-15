@@ -2,110 +2,96 @@
 THE WORD — Quick KP yes/no on universal life topics.
 
 Maps each topic to a KP house, runs cuspal sub-lord analysis,
-returns yes/no with a short supporting line.
+returns yes/no/maybe + one-line LLM supporting text.
 
-Called by: POST /the-word { topic, kundli_data }
+Endpoints:
+  POST /api/public/the-word        run a reading
+  GET  /api/public/the-word/topics list available topics
 """
 
-from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from app.services.voice import voice_card
+from app.services.features._base import (
+    safe, extract_birth, get_engine, call_llm,
+)
 
 
-# 25 universal human topics → mapped to KP houses
+router = APIRouter(prefix="/public", tags=["The Word"])
+
+
+# Topic → KP house mapping. Category drives the supporting/negating house set
+# from kp_horary's HORARY_EVENTS table.
 TOPICS = {
-    'love':         {'house': 7, 'question': 'Is love coming?', 'category': 'love'},
-    'money':        {'house': 2, 'question': 'Will wealth grow?', 'category': 'wealth'},
-    'travel':       {'house': 9, 'question': 'Is travel ahead?', 'category': 'travel'},
-    'health':       {'house': 1, 'question': 'Is health improving?', 'category': 'health'},
-    'career':       {'house': 10, 'question': 'Will career rise?', 'category': 'career'},
-    'marriage':     {'house': 7, 'question': 'Is marriage destined?', 'category': 'marriage'},
-    'children':     {'house': 5, 'question': 'Are children in the stars?', 'category': 'children'},
-    'fame':         {'house': 10, 'question': 'Will recognition come?', 'category': 'career'},
-    'enemies':      {'house': 6, 'question': 'Will enemies trouble?', 'category': 'litigation'},
-    'property':     {'house': 4, 'question': 'Will you own property?', 'category': 'property'},
-    'education':    {'house': 4, 'question': 'Will education succeed?', 'category': 'education'},
-    'luck':         {'house': 9, 'question': 'Is luck on your side?', 'category': 'general'},
-    'friendship':   {'house': 11, 'question': 'Are true friends near?', 'category': 'general'},
-    'spirituality': {'house': 12, 'question': 'Is awakening close?', 'category': 'general'},
-    'secrets':      {'house': 8, 'question': 'Will secrets surface?', 'category': 'general'},
-    'inheritance':  {'house': 8, 'question': 'Is inheritance likely?', 'category': 'wealth'},
-    'promotion':    {'house': 10, 'question': 'Is promotion near?', 'category': 'job_change'},
-    'court case':   {'house': 7, 'question': 'Will you win the case?', 'category': 'litigation'},
-    'debt':         {'house': 6, 'question': 'Will debts clear?', 'category': 'wealth'},
-    'foreign':      {'house': 12, 'question': 'Will you go abroad?', 'category': 'travel'},
-    'vehicle':      {'house': 4, 'question': 'Will you get a vehicle?', 'category': 'property'},
-    'surgery':      {'house': 8, 'question': 'Is surgery needed?', 'category': 'health'},
-    'business':     {'house': 7, 'question': 'Will business succeed?', 'category': 'business'},
-    'passion':      {'house': 5, 'question': 'Will passion ignite?', 'category': 'love'},
-    'freedom':      {'house': 12, 'question': 'Will you find freedom?', 'category': 'general'},
+    'love':         {'house': 7,  'category': 'love'},
+    'money':        {'house': 2,  'category': 'wealth'},
+    'travel':       {'house': 9,  'category': 'travel'},
+    'health':       {'house': 1,  'category': 'health'},
+    'career':       {'house': 10, 'category': 'career'},
+    'marriage':     {'house': 7,  'category': 'marriage'},
+    'children':     {'house': 5,  'category': 'children'},
+    'fame':         {'house': 10, 'category': 'career'},
+    'enemies':      {'house': 6,  'category': 'litigation'},
+    'property':     {'house': 4,  'category': 'property'},
+    'education':    {'house': 4,  'category': 'education'},
+    'luck':         {'house': 9,  'category': 'general'},
+    'friendship':   {'house': 11, 'category': 'general'},
+    'spirituality': {'house': 12, 'category': 'general'},
+    'secrets':      {'house': 8,  'category': 'general'},
+    'inheritance':  {'house': 8,  'category': 'wealth'},
+    'promotion':    {'house': 10, 'category': 'job_change'},
+    'court_case':   {'house': 7,  'category': 'litigation'},
+    'debt':         {'house': 6,  'category': 'wealth'},
+    'foreign':      {'house': 12, 'category': 'travel'},
+    'vehicle':      {'house': 4,  'category': 'property'},
+    'surgery':      {'house': 8,  'category': 'health'},
+    'business':     {'house': 7,  'category': 'business'},
+    'passion':      {'house': 5,  'category': 'love'},
+    'freedom':      {'house': 12, 'category': 'general'},
 }
 
-def get_all_topics():
-    return list(TOPICS.keys())
 
-
-def _safe(fn, default=None):
-    try:
-        result = fn()
-        return result if result is not None else default
-    except Exception:
-        return default
-
-
-def build_the_word(engine, topic: str, language: str = 'en') -> Dict:
-    """Run KP analysis for a single topic."""
-
+def build_the_word(engine, topic: str) -> Dict:
     topic_data = TOPICS.get(topic.lower())
     if not topic_data:
         return {'error': f'Unknown topic: {topic}', 'valid_topics': list(TOPICS.keys())}
 
     from app.services.kp.kp_complete import KPComplete
-    kp = KPComplete(engine)
+    from app.services.kp.kp_horary import HORARY_EVENTS
 
+    kp = KPComplete(engine)
     house = topic_data['house']
     category = topic_data['category']
-    question = topic_data['question']
 
-    # Fruitfulness of the house
-    fruit = kp.check_fruitfulness(house)
-    if not isinstance(fruit, dict):
-        fruit = {}
+    fruit = kp.check_fruitfulness(house) or {}
+    if not isinstance(fruit, dict): fruit = {}
 
     verdict_raw = fruit.get('fertility', 'Unknown')
     csl = fruit.get('cusp_sub_lord', '')
     csl_sign = fruit.get('csl_sign', '')
 
-    # Get cusps for chain
-    cusps = kp.get_placidus_cusps()
-    if not isinstance(cusps, dict):
-        cusps = {}
-    cusp = cusps.get(house, {})
-    if not isinstance(cusp, dict):
-        cusp = {}
+    cusps = kp.get_placidus_cusps() or {}
+    if not isinstance(cusps, dict): cusps = {}
+    cusp = cusps.get(house, {}) or {}
+    if not isinstance(cusp, dict): cusp = {}
 
     sign = cusp.get('rashi_name', '')
     nak = cusp.get('nakshatra', '')
-    sub_lord = cusp.get('sub_lord', '')
 
-    # CSL significator check
-    csl_sig = {}
-    if csl:
-        csl_sig = _safe(lambda: kp.get_planet_significators(csl), {})
-        if not isinstance(csl_sig, dict):
-            csl_sig = {}
-
+    csl_sig = safe(lambda: kp.get_planet_significators(csl), {}) or {} if csl else {}
+    if not isinstance(csl_sig, dict): csl_sig = {}
     csl_houses = csl_sig.get('all_signified_houses', [])
 
-    # Supporting / negating houses for this category
-    from app.services.kp.kp_horary import HORARY_EVENTS
-    event_cfg = HORARY_EVENTS.get(category, HORARY_EVENTS['general'])
+    event_cfg = HORARY_EVENTS.get(category, HORARY_EVENTS.get('general', {}))
     supporting = set([house] + event_cfg.get('supporting', []))
     negating = set(event_cfg.get('negating', []))
 
     fav = set(csl_houses) & supporting
     unfav = set(csl_houses) & negating
 
-    # Determine yes/no
     if verdict_raw == 'Fruitful' and len(fav) > len(unfav):
         answer = 'yes'
         confidence = min(80 + len(fav) * 5, 95)
@@ -119,45 +105,93 @@ def build_the_word(engine, topic: str, language: str = 'en') -> Dict:
         answer = 'maybe'
         confidence = 45
 
-    # Ruling planets
-    rp = _safe(lambda: kp.get_ruling_planets(), {})
-    if not isinstance(rp, dict):
-        rp = {}
-
-    briefing = f"""TOPIC: {topic} — "{question}"
-House: H{house} | Sign: {sign} | CSL: {csl} in {csl_sign}
-Verdict: {verdict_raw} | Answer: {answer.upper()} ({confidence}%)
-CSL signifies: {csl_houses}
-Favorable: {sorted(fav)} | Unfavorable: {sorted(unfav)}"""
-
     return {
         'topic': topic,
-        'question': question,
+        'category': category,
         'house': house,
         'sign': sign,
+        'nakshatra': nak,
         'csl': csl,
+        'csl_sign': csl_sign,
+        'csl_signifies': sorted(csl_houses) if isinstance(csl_houses, (list, set)) else [],
+        'favorable_houses': sorted(fav),
+        'unfavorable_houses': sorted(unfav),
+        'verdict_raw': verdict_raw,
         'answer': answer,
         'confidence': confidence,
-        'briefing': briefing,
     }
 
 
 def build_word_prompt(data: Dict, language: str = 'en') -> str:
-    """Build LLM prompt for a one-line supporting text."""
-    briefing = data['briefing']
-    answer = data['answer']
-    topic = data['topic']
+    return f"""{voice_card(language)}
 
-    lang_note = ''
-    if language and language.lower() not in ('english', 'en'):
-        lang_note = f'\nRespond in {language}.'
+You are giving a ONE-LINE oracle answer about a life topic.
 
-    return f"""You are a wise oracle giving a ONE-LINE answer.{lang_note}
+TOPIC: {data['topic']}
+KP analysis says: {data['answer'].upper()} ({data['confidence']}% confidence)
+House {data['house']} ({data['sign']}), CSL: {data['csl']} in {data['csl_sign']}
+CSL signifies houses: {data['csl_signifies']}
+Favorable: {data['favorable_houses']} | Unfavorable: {data['unfavorable_houses']}
 
-{briefing}
+Write EXACTLY ONE sentence — 8 to 18 words — in the same voice as the rest of the app.
+No house numbers. No planet names. No astrology jargon.
+If yes: name what's coming and the energy around it.
+If no: name the gentle redirect, what to do instead.
+If maybe: name what's still shifting, what hasn't decided yet."""
 
-The answer is {answer.upper()}.
-Write exactly ONE sentence — 8 to 15 words.
-No astrology jargon. No house numbers. No planet names.
-Just a warm, specific, memorable line about {topic}.
-If yes: what's coming. If no: what to do instead. If maybe: what's still shifting."""
+
+class _WordRequest(BaseModel):
+    topic: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = 'en'
+
+
+@router.get('/the-word/topics')
+async def list_topics():
+    # Topic catalog — frontend uses keys to look up localized labels from /strings
+    topics = [{'key': k, 'category': v['category'], 'house': v['house']} for k, v in TOPICS.items()]
+    return {'topics': topics, 'count': len(topics), 'version': 1}
+
+
+@router.post('/the-word')
+async def get_the_word(request_body: _WordRequest, request: Request):
+    from app.core.config import settings
+    from app.core.rate_limiter import check_rate_limit
+
+    check_rate_limit(request, 'feature', getattr(settings, 'RATE_LIMIT_FEATURE', 60))
+
+    birth_data = extract_birth(request_body.kundli_data) or request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail='Birth data required')
+    if not request_body.topic or not request_body.topic.strip():
+        raise HTTPException(status_code=400, detail='Topic required')
+
+    try:
+        engine = get_engine(birth_data)
+        language = request_body.language or 'en'
+
+        data = build_the_word(engine, request_body.topic.strip())
+        if 'error' in data:
+            raise HTTPException(status_code=400, detail=data['error'])
+
+        prompt = build_word_prompt(data, language)
+        line = await call_llm(prompt, settings,
+                              user_message="The word, please.",
+                              max_tokens=200, temperature=0.85)
+        # Strip surrounding quotes if LLM wrapped it
+        line = line.strip().strip('"').strip("'")
+
+        return {
+            **data,
+            'line': line,
+            'version': 1,
+            'cache_ttl_seconds': 0,  # KP horary is moment-based
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+the_word_router = router

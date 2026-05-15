@@ -1,158 +1,141 @@
 """
-CORE NUMBERS — All key numerology numbers with short significance notes.
+CORE NUMBERS — All key numerology numbers in one reading.
 
-Mulank, Bhagyank, Personal Year/Month/Day, Lo Shu missing numbers.
-LLM writes a flowing reading about all numbers together.
-
-Called by: POST /core-numbers { kundli_data, name }
+Endpoint: POST /api/public/core-numbers
 """
 
-from datetime import datetime, date
-from typing import Dict
+from datetime import date, datetime
+from typing import Dict, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from app.services.voice import voice_card
+from app.services.features._base import extract_birth, call_llm
 
 
-def _safe(fn, default=None):
-    try:
-        result = fn()
-        return result if result is not None else default
-    except Exception:
-        return default
+router = APIRouter(prefix="/public", tags=["Core Numbers"])
 
 
-def build_core_numbers(birth_date: date, name: str = '', language: str = 'en') -> Dict:
-    """Build all core numerology numbers."""
-
+def build_core_numbers(birth_date: date, name: str = '') -> Dict:
     from app.services.numerology.core import NumerologyEngine
 
     ne = NumerologyEngine(name=name, birth_date=birth_date)
 
-    mulank = ne.get_mulank()
+    mulank = ne.get_mulank() or {}
     if not isinstance(mulank, dict): mulank = {}
-    bhagyank = ne.get_bhagyank()
+    bhagyank = ne.get_bhagyank() or {}
     if not isinstance(bhagyank, dict): bhagyank = {}
-    personal_year = ne.get_personal_year()
-    if not isinstance(personal_year, dict): personal_year = {}
-    personal_month = ne.get_personal_month()
-    if not isinstance(personal_month, dict): personal_month = {}
-    personal_day = ne.get_personal_day()
-    if not isinstance(personal_day, dict): personal_day = {}
-    lo_shu = ne.get_lo_shu_grid()
+    py = ne.get_personal_year() or {}
+    if not isinstance(py, dict): py = {}
+    pm = ne.get_personal_month() or {}
+    if not isinstance(pm, dict): pm = {}
+    pd = ne.get_personal_day() or {}
+    if not isinstance(pd, dict): pd = {}
+    lo_shu = ne.get_lo_shu_grid() or {}
     if not isinstance(lo_shu, dict): lo_shu = {}
 
     namank = {}
     if name:
-        namank = ne.get_namank()
-        if not isinstance(namank, dict): namank = {}
-
-    chaldean = namank.get('chaldean', {}) if namank else {}
-    if not isinstance(chaldean, dict): chaldean = {}
-
-    missing = lo_shu.get('missing', [])
-    if not isinstance(missing, list): missing = []
-    repeated = lo_shu.get('repeated', {})
-    if not isinstance(repeated, dict): repeated = {}
+        nm = ne.get_namank() or {}
+        if isinstance(nm, dict):
+            chal = nm.get('chaldean', {})
+            if isinstance(chal, dict):
+                namank = chal
 
     numbers = [
-        {
-            'key': 'mulank',
-            'label': 'Root Number',
-            'number': mulank.get('number', 0),
-            'planet': mulank.get('planet', ''),
-            'name': mulank.get('name', ''),
-            'traits': mulank.get('traits', ''),
-            'note': f"Born on the {birth_date.day}th — this is your core vibration, your driver.",
-            'color': mulank.get('color', ''),
-            'day': mulank.get('day', ''),
-        },
-        {
-            'key': 'bhagyank',
-            'label': 'Destiny Number',
-            'number': bhagyank.get('number', 0),
-            'planet': bhagyank.get('planet', ''),
-            'name': bhagyank.get('name', ''),
-            'traits': bhagyank.get('traits', ''),
-            'note': f"Your life path — where the universe is taking you.",
-            'calculation': bhagyank.get('calculation', ''),
-            'is_master': bhagyank.get('is_master', False),
-        },
-        {
-            'key': 'personal_year',
-            'label': 'Personal Year',
-            'number': personal_year.get('number', 0),
-            'theme': personal_year.get('theme', ''),
-            'note': f"The energy governing {datetime.now().year} for you.",
-        },
-        {
-            'key': 'personal_month',
-            'label': 'Personal Month',
-            'number': personal_month.get('number', 0),
-            'theme': personal_month.get('theme', ''),
-            'note': f"This month's vibration within your year cycle.",
-        },
-        {
-            'key': 'personal_day',
-            'label': 'Today',
-            'number': personal_day.get('number', 0),
-            'theme': personal_day.get('theme', ''),
-            'note': f"Today's number — the energy of this specific day for you.",
-        },
+        {'key': 'mulank', 'label': 'Root Number',
+         'number': mulank.get('number', 0), 'planet': mulank.get('planet', '')},
+        {'key': 'bhagyank', 'label': 'Destiny Number',
+         'number': bhagyank.get('number', 0), 'planet': bhagyank.get('planet', '')},
+        {'key': 'personal_year', 'label': f'Personal Year {datetime.now().year}',
+         'number': py.get('number', 0)},
+        {'key': 'personal_month', 'label': 'Personal Month',
+         'number': pm.get('number', 0)},
+        {'key': 'personal_day', 'label': 'Today',
+         'number': pd.get('number', 0)},
     ]
 
-    if name and chaldean.get('root'):
+    if name and namank.get('root'):
         numbers.insert(2, {
-            'key': 'namank',
-            'label': 'Name Number',
-            'number': chaldean.get('root', 0),
-            'note': f"Your name \"{name}\" vibrates at this frequency.",
-            'total': chaldean.get('total', 0),
+            'key': 'namank', 'label': 'Name Number',
+            'number': namank.get('root', 0), 'total': namank.get('total', 0),
         })
 
-    # Build briefing
-    briefing_lines = [f"CORE NUMBERS for {birth_date} (name: {name or 'not provided'})\n"]
-    for n in numbers:
-        briefing_lines.append(f"{n['label']}: {n['number']} — {n.get('name', n.get('theme', ''))}")
-        if n.get('planet'):
-            briefing_lines.append(f"  Planet: {n['planet']} | Traits: {n.get('traits', '')}")
-
-    briefing_lines.append(f"\nLo Shu missing: {missing}")
-    briefing_lines.append(f"Lo Shu repeated: {repeated}")
-
     return {
+        'name': name,
+        'birth_date': str(birth_date),
         'numbers': numbers,
-        'missing_numbers': missing,
-        'repeated_numbers': repeated,
+        'missing_numbers': lo_shu.get('missing', []),
+        'repeated_numbers': lo_shu.get('repeated', {}),
         'lo_shu_grid': lo_shu.get('grid', {}),
-        'briefing': '\n'.join(briefing_lines),
     }
 
 
 def build_core_numbers_prompt(data: Dict, language: str = 'en') -> str:
-    """Build LLM prompt for core numbers reading."""
-    briefing = data['briefing']
-    numbers = data['numbers']
-    missing = data['missing_numbers']
+    nums_text = '\n'.join([
+        f"- {n['label']}: {n['number']}" + (f" ({n['planet']})" if n.get('planet') else '')
+        for n in data['numbers']
+    ])
 
-    lang_note = ''
-    if language and language.lower() not in ('english', 'en'):
-        lang_note = f'\nRespond in {language}.'
+    return f"""{voice_card(language)}
 
-    num_summary = ', '.join(f"{n['label']}={n['number']}" for n in numbers)
+You are reading a person's complete numerology profile.
 
-    return f"""You are a numerologist — clear, warm, insightful.{lang_note}
+NUMBERS:
+{nums_text}
 
-{briefing}
+Lo Shu missing numbers (gaps in their grid): {data['missing_numbers']}
+Lo Shu repeated numbers (intensified): {data['repeated_numbers']}
+Year: {datetime.now().year}
 
-Write a FLOWING reading about this person's numbers. 6-8 sentences.
-
-Cover:
-- The Root Number — what drives them daily (1 sentence)
-- The Destiny Number — where life is pulling them (1 sentence)
-- How Root and Destiny work together or clash (1 sentence)
-- The Personal Year — what {datetime.now().year} is about for them (1 sentence)
-- Today's number — one line about what today brings (1 sentence)
-- Missing numbers from Lo Shu ({missing}) — what gaps exist (1 sentence)
+Write a FLOWING reading. 6-8 sentences. Cover:
+- Root Number — what drives them daily
+- Destiny Number — where life is pulling them
+- How Root and Destiny work together or clash for THIS person
+- Personal Year — what this year is really about
+- Today — one line on the day's energy
+- Lo Shu missing — what gaps to be aware of
 - End with one surprising connection between their numbers
 
-Under 130 words. No headers, no bullets, no number labels like "Number 1:".
-Just flowing text — each sentence about a different number.
-Reference the actual numbers and their planets/themes."""
+Under 130 words. Prose only — no headers, no bullets, no "1." labels.
+Reference the actual numbers and their planets."""
+
+
+class _CoreNumbersRequest(BaseModel):
+    name: Optional[str] = ''
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = 'en'
+
+
+@router.post('/core-numbers')
+async def get_core_numbers(request_body: _CoreNumbersRequest, request: Request):
+    from app.core.config import settings
+    from app.core.rate_limiter import check_rate_limit
+
+    check_rate_limit(request, 'feature', getattr(settings, 'RATE_LIMIT_FEATURE', 60))
+
+    birth_data = extract_birth(request_body.kundli_data) or request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail='Birth data required')
+
+    try:
+        birth_date = date(birth_data['year'], birth_data['month'], birth_data['day'])
+        language = request_body.language or 'en'
+        name = (request_body.name or '').strip()
+
+        data = build_core_numbers(birth_date, name)
+        prompt = build_core_numbers_prompt(data, language)
+        reading = await call_llm(prompt, settings,
+                                 user_message="Read these numbers together.",
+                                 max_tokens=800, temperature=0.8)
+
+        return {**data, 'reading': reading, 'version': 1, 'cache_ttl_seconds': 86400}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+core_numbers_router = router

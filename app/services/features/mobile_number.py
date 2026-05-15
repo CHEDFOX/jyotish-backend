@@ -1,27 +1,20 @@
 """
-MOBILE NUMBER — Numerological vibration of your phone number.
+MOBILE NUMBER — Numerological vibration of a phone number.
 
-Calculates total vibration, individual digit influence,
-compatibility with owner's birth numbers.
-
-Called by: POST /mobile-number { mobile, kundli_data }
+Endpoint: POST /api/public/mobile-number
 """
 
 from datetime import date
-from typing import Dict
+from typing import Dict, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from app.services.voice import voice_card
+from app.services.features._base import extract_birth, call_llm
 
 
-NUMBER_VIBES = {
-    1: {'vibe': 'Leadership', 'planet': 'Sun', 'effect': 'Attracts authority and independent opportunities'},
-    2: {'vibe': 'Partnership', 'planet': 'Moon', 'effect': 'Brings emotional connections and cooperative energy'},
-    3: {'vibe': 'Expression', 'planet': 'Jupiter', 'effect': 'Attracts creativity, communication, and social growth'},
-    4: {'vibe': 'Stability', 'planet': 'Rahu', 'effect': 'Brings structure but can attract unexpected disruptions'},
-    5: {'vibe': 'Freedom', 'planet': 'Mercury', 'effect': 'Attracts change, travel, and dynamic opportunities'},
-    6: {'vibe': 'Harmony', 'planet': 'Venus', 'effect': 'Brings love, beauty, and domestic comfort'},
-    7: {'vibe': 'Intuition', 'planet': 'Ketu', 'effect': 'Attracts spiritual seekers but can isolate socially'},
-    8: {'vibe': 'Power', 'planet': 'Saturn', 'effect': 'Brings material success but demands discipline and patience'},
-    9: {'vibe': 'Compassion', 'planet': 'Mars', 'effect': 'Attracts humanitarian connections and global reach'},
-}
+router = APIRouter(prefix="/public", tags=["Mobile Number"])
 
 
 def _reduce(n):
@@ -30,53 +23,39 @@ def _reduce(n):
     return n
 
 
-def build_mobile_number(mobile: str, birth_date: date, language: str = 'en') -> Dict:
-    """Analyze mobile number vibration."""
-
+def build_mobile_number(mobile: str, birth_date: date) -> Dict:
     from app.services.numerology.core import NumerologyEngine
 
     ne = NumerologyEngine(birth_date=birth_date)
-    mulank = ne.get_mulank()
+    mulank = ne.get_mulank() or {}
     if not isinstance(mulank, dict): mulank = {}
-    bhagyank = ne.get_bhagyank()
+    bhagyank = ne.get_bhagyank() or {}
     if not isinstance(bhagyank, dict): bhagyank = {}
 
     owner_mulank = mulank.get('number', 0)
     owner_bhagyank = bhagyank.get('number', 0)
     compatible = mulank.get('compatible_numbers', [])
 
-    # Clean mobile number
     digits = ''.join(c for c in mobile if c.isdigit())
     if not digits:
-        return {'error': 'No valid digits in mobile number'}
+        return {'error': 'No valid digits'}
 
-    # Total vibration
     total = sum(int(d) for d in digits)
     root = _reduce(total)
-    vibe_info = NUMBER_VIBES.get(root, {})
 
-    # Digit frequency
     freq = {}
     for d in digits:
         n = int(d)
         freq[n] = freq.get(n, 0) + 1
 
-    # Most repeated digit
     dominant_digit = max(freq, key=freq.get) if freq else 0
     dominant_count = freq.get(dominant_digit, 0)
-    dominant_info = NUMBER_VIBES.get(dominant_digit if dominant_digit > 0 else 1, {})
+    missing = [i for i in range(10) if i not in freq]
+    last_digit = int(digits[-1])
 
-    # Missing digits
-    missing = [i for i in range(0, 10) if i not in freq]
-
-    # Last digit (most impactful in phone numerology)
-    last_digit = int(digits[-1]) if digits else 0
-    last_info = NUMBER_VIBES.get(last_digit if last_digit > 0 else 9, {})
-
-    # Compatibility
-    ideal = [owner_mulank, owner_bhagyank] + compatible
-    is_aligned = root in ideal
+    ideal = [owner_mulank, owner_bhagyank] + (compatible if isinstance(compatible, list) else [])
     power_numbers = [1, 3, 5, 6, 9]
+    is_aligned = root in ideal
     is_power = root in power_numbers
 
     if is_aligned and is_power:
@@ -85,65 +64,97 @@ def build_mobile_number(mobile: str, birth_date: date, language: str = 'en') -> 
         verdict = 'good'
     elif is_power:
         verdict = 'decent'
-    elif root == 4 or root == 8:
+    elif root in (4, 8):
         verdict = 'caution'
     else:
         verdict = 'neutral'
-
-    briefing = f"""MOBILE NUMBER ANALYSIS
-
-Number: {mobile} (digits: {digits})
-Total: {total} → Root: {root}
-Vibration: {vibe_info.get('vibe', '')} ({vibe_info.get('planet', '')})
-
-OWNER: Mulank {owner_mulank} | Bhagyank {owner_bhagyank} | Compatible: {compatible}
-Alignment: {'YES' if is_aligned else 'NO'} | Verdict: {verdict.upper()}
-
-DIGIT FREQUENCY: {freq}
-Dominant digit: {dominant_digit} (appears {dominant_count}x) — {dominant_info.get('vibe', '')}
-Last digit: {last_digit} — {last_info.get('vibe', '')}
-Missing: {missing}"""
 
     return {
         'mobile': mobile,
         'digits': digits,
         'total': total,
         'root': root,
-        'vibe': vibe_info.get('vibe', ''),
-        'planet': vibe_info.get('planet', ''),
-        'effect': vibe_info.get('effect', ''),
         'dominant_digit': dominant_digit,
         'dominant_count': dominant_count,
-        'dominant_vibe': dominant_info.get('vibe', ''),
         'last_digit': last_digit,
-        'last_vibe': last_info.get('vibe', ''),
         'digit_freq': freq,
         'missing_digits': missing,
         'owner_mulank': owner_mulank,
         'owner_bhagyank': owner_bhagyank,
+        'compatible_numbers': compatible,
         'is_aligned': is_aligned,
+        'is_power': is_power,
         'verdict': verdict,
-        'briefing': briefing,
     }
 
 
 def build_mobile_prompt(data: Dict, language: str = 'en') -> str:
-    briefing = data['briefing']
+    closing = ('Give one concrete fix if the number is misaligned.'
+               if data['verdict'] in ('weak', 'caution', 'neutral')
+               else 'Suggest one way to use this number to its full potential.')
 
-    lang_note = ''
-    if language and language.lower() not in ('english', 'en'):
-        lang_note = f'\nRespond in {language}.'
+    return f"""{voice_card(language)}
 
-    return f"""You are a numerologist analyzing a phone number — practical, warm, specific.{lang_note}
+You are reading a mobile phone number's numerology.
 
-{briefing}
+INDICATORS:
+- Mobile: {data['mobile']}
+- All digits summed: {data['total']} → root {data['root']}
+- Dominant digit (most repeated): {data['dominant_digit']}, appears {data['dominant_count']} times
+- Last digit (the impression people feel when they see this number): {data['last_digit']}
+- Missing digits in the number: {data['missing_digits']}
+- Owner Mulank: {data['owner_mulank']} | Bhagyank: {data['owner_bhagyank']}
+- Aligned with owner: {data['is_aligned']}
+- Verdict: {data['verdict']}
 
-Write 4-5 sentences about how this mobile number affects the person:
+Write 4-5 sentences:
+1. Energy the root number ({data['root']}) brings to every call, message, connection.
+2. The dominant digit ({data['dominant_digit']}) — what it amplifies in their daily phone use.
+3. The last digit ({data['last_digit']}) — first impression a person gets when they see this number.
+4. Whether the number is working with the owner or against them. Be specific.
+5. {closing}
 
-1. The overall vibration ({data['root']}) and what energy it brings to every call and message.
-2. The dominant digit ({data['dominant_digit']}, appears {data['dominant_count']} times) — what it amplifies.
-3. The last digit ({data['last_digit']}) — this is the "first impression" people get when they see your number.
-4. Whether this number is aligned with the owner's energy or working against it.
-5. One specific suggestion if the number is weak.
+Under 90 words. Practical — how does this number affect their actual daily life?"""
 
-Under 80 words. No jargon. Practical — how does this number affect their daily life?"""
+
+class _MobileRequest(BaseModel):
+    mobile: str
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = 'en'
+
+
+@router.post('/mobile-number')
+async def get_mobile_number(request_body: _MobileRequest, request: Request):
+    from app.core.config import settings
+    from app.core.rate_limiter import check_rate_limit
+
+    check_rate_limit(request, 'feature', getattr(settings, 'RATE_LIMIT_FEATURE', 60))
+
+    birth_data = extract_birth(request_body.kundli_data) or request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail='Birth data required')
+    if not request_body.mobile or not request_body.mobile.strip():
+        raise HTTPException(status_code=400, detail='Mobile number required')
+
+    try:
+        birth_date = date(birth_data['year'], birth_data['month'], birth_data['day'])
+        language = request_body.language or 'en'
+
+        data = build_mobile_number(request_body.mobile.strip(), birth_date)
+        if 'error' in data:
+            raise HTTPException(status_code=400, detail=data['error'])
+
+        prompt = build_mobile_prompt(data, language)
+        reading = await call_llm(prompt, settings,
+                                 user_message="Read this mobile number.",
+                                 max_tokens=600, temperature=0.75)
+
+        return {**data, 'reading': reading, 'version': 1, 'cache_ttl_seconds': 2592000}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+mobile_number_router = router

@@ -1,44 +1,32 @@
 """
-TODAY'S SKY — What the day holds for you.
+TODAY'S SKY — Single-day reading.
 
-Calculates: current transits, tithi, nakshatra, yoga, karana,
-active dasha, transit aspects to natal chart, moon sign transit.
+Quick read of the day's energy: day lord, Moon transit, tithi, yoga, retrogrades.
+LLM produces ONE flowing 80-word reading.
 
-Returns: structured day data + LLM guiding note.
-
-Called by: POST /today { kundli_data }
+Endpoint: POST /api/public/today-sky
 """
 
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from app.services.voice import voice_card
+from app.services.features._base import (
+    safe, extract_birth, get_engine, call_llm,
+)
+
+
+router = APIRouter(prefix="/public", tags=["Today Sky"])
 
 
 WEEKDAY_LORDS = {
-    0: ('Moon', 'Monday'),
-    1: ('Mars', 'Tuesday'),
-    2: ('Mercury', 'Wednesday'),
-    3: ('Jupiter', 'Thursday'),
-    4: ('Venus', 'Friday'),
-    5: ('Saturn', 'Saturday'),
+    0: ('Moon', 'Monday'), 1: ('Mars', 'Tuesday'), 2: ('Mercury', 'Wednesday'),
+    3: ('Jupiter', 'Thursday'), 4: ('Venus', 'Friday'), 5: ('Saturn', 'Saturday'),
     6: ('Sun', 'Sunday'),
 }
-
-TITHI_NAMES = [
-    'Pratipada', 'Dwitiya', 'Tritiya', 'Chaturthi', 'Panchami',
-    'Shashthi', 'Saptami', 'Ashtami', 'Navami', 'Dashami',
-    'Ekadashi', 'Dwadashi', 'Trayodashi', 'Chaturdashi', 'Purnima',
-    'Pratipada', 'Dwitiya', 'Tritiya', 'Chaturthi', 'Panchami',
-    'Shashthi', 'Saptami', 'Ashtami', 'Navami', 'Dashami',
-    'Ekadashi', 'Dwadashi', 'Trayodashi', 'Chaturdashi', 'Amavasya',
-]
-
-
-def _safe(fn, default=None):
-    try:
-        result = fn()
-        return result if result is not None else default
-    except Exception:
-        return default
 
 
 def _pl(planets, name):
@@ -46,140 +34,122 @@ def _pl(planets, name):
     return p if isinstance(p, dict) else {}
 
 
-def build_today(engine, language: str = 'en') -> Dict:
-    """Build today's astrological snapshot for this person."""
-
+def build_today_sky(engine) -> Dict:
     now = datetime.now()
     planets = engine.planets if isinstance(getattr(engine, 'planets', None), dict) else {}
 
-    # Current transits
-    transits = _safe(engine.get_current_transits, {})
+    transits = safe(engine.get_current_transits, {}) or {}
     if not isinstance(transits, dict): transits = {}
 
-    # Today's weekday lord
     day_idx = now.weekday()
     day_lord, day_name = WEEKDAY_LORDS.get(day_idx, ('', ''))
 
-    # Moon transit (most important daily indicator)
-    t_moon = transits.get('Moon', {})
-    if not isinstance(t_moon, dict): t_moon = {}
-    moon_transit_sign = t_moon.get('rashi_name', '')
-    moon_transit_nak = t_moon.get('nakshatra_name', '')
-    moon_transit_house = t_moon.get('house_from_natal', t_moon.get('house', 0))
+    t_moon = transits.get('Moon', {}) if isinstance(transits.get('Moon'), dict) else {}
+    t_sun = transits.get('Sun', {}) if isinstance(transits.get('Sun'), dict) else {}
 
-    # Sun transit
-    t_sun = transits.get('Sun', {})
-    if not isinstance(t_sun, dict): t_sun = {}
-    sun_transit_sign = t_sun.get('rashi_name', '')
-
-    # Natal moon sign (for transit comparison)
     natal_moon = _pl(planets, 'Moon')
-    natal_moon_sign = natal_moon.get('rashi_name', '')
-    natal_moon_nak = natal_moon.get('nakshatra_name', '')
-
-    # Active dasha
-    dasha = _safe(engine.get_vimshottari_dasha, {})
-    if not isinstance(dasha, dict): dasha = {}
-    maha = dasha.get('mahadasha', {})
-    if not isinstance(maha, dict): maha = {}
-    antar = dasha.get('antardasha', {})
-    if not isinstance(antar, dict): antar = {}
-    dasha_string = dasha.get('dasha_string', '')
-    maha_lord = maha.get('lord', '')
-
-    # Panchanga-like data
-    panchanga = _safe(engine.get_panchanga, {})
-    if not isinstance(panchanga, dict): panchanga = {}
-    tithi = panchanga.get('tithi', {})
-    if not isinstance(tithi, dict): tithi = {}
-    tithi_name = tithi.get('name', '')
-    tithi_num = tithi.get('number', 0)
-    paksha = tithi.get('paksha', '')
-
-    yoga_panch = panchanga.get('yoga', {})
-    if not isinstance(yoga_panch, dict): yoga_panch = {}
-    yoga_name = yoga_panch.get('name', '')
-
-    karana = panchanga.get('karana', {})
-    if not isinstance(karana, dict): karana = {}
-    karana_name = karana.get('name', '')
-
-    # Retrograde planets in transit
-    retro_planets = []
-    for pname, pdata in transits.items():
-        if not isinstance(pdata, dict): continue
-        if pdata.get('retrograde', False) or pdata.get('is_retrograde', False):
-            retro_planets.append(pname)
-
-    # Day lord relationship to chart
-    natal_day_lord = _pl(planets, day_lord)
-    day_lord_house = natal_day_lord.get('house', 0)
-    day_lord_sign = natal_day_lord.get('rashi_name', '')
-
-    # Ascendant
     asc = engine.ascendant if isinstance(getattr(engine, 'ascendant', None), dict) else {}
-    asc_sign = asc.get('rashi_name', '')
 
-    # Briefing for LLM
-    briefing = f"""TODAY: {now.strftime('%A, %B %d, %Y')}
+    dasha = safe(engine.get_vimshottari_dasha, {}) or {}
+    if not isinstance(dasha, dict): dasha = {}
+    maha = dasha.get('mahadasha', {}) if isinstance(dasha.get('mahadasha'), dict) else {}
 
-PERSON: {asc_sign} ascendant, natal Moon in {natal_moon_sign} ({natal_moon_nak})
-Active dasha: {dasha_string}
-Mahadasha lord: {maha_lord}
+    panchanga = safe(engine.get_panchanga, {}) or {}
+    if not isinstance(panchanga, dict): panchanga = {}
+    tithi = panchanga.get('tithi', {}) if isinstance(panchanga.get('tithi'), dict) else {}
+    yoga_p = panchanga.get('yoga', {}) if isinstance(panchanga.get('yoga'), dict) else {}
+    karana = panchanga.get('karana', {}) if isinstance(panchanga.get('karana'), dict) else {}
 
-DAY ENERGY:
-  Day lord: {day_lord} ({day_name}) — in your chart at H{day_lord_house} in {day_lord_sign}
-  Moon transiting: {moon_transit_sign} ({moon_transit_nak})
-  Sun transiting: {sun_transit_sign}
+    retros = [
+        p for p, d in transits.items()
+        if isinstance(d, dict) and (d.get('retrograde') or d.get('is_retrograde'))
+    ]
 
-PANCHANGA:
-  Tithi: {tithi_name} ({paksha})
-  Yoga: {yoga_name}
-  Karana: {karana_name}
-
-RETROGRADE PLANETS: {', '.join(retro_planets) if retro_planets else 'None'}"""
+    natal_day_lord = _pl(planets, day_lord)
 
     return {
         'date': now.strftime('%A, %B %d, %Y'),
         'day_lord': day_lord,
         'day_name': day_name,
-        'day_lord_house': day_lord_house,
-        'day_lord_sign': day_lord_sign,
-        'moon_transit': moon_transit_sign,
-        'moon_nakshatra': moon_transit_nak,
-        'sun_transit': sun_transit_sign,
-        'natal_moon': natal_moon_sign,
-        'tithi': tithi_name,
-        'paksha': paksha,
-        'yoga': yoga_name,
-        'karana': karana_name,
-        'dasha': dasha_string,
-        'retro_planets': retro_planets,
-        'ascendant': asc_sign,
-        'briefing': briefing,
+        'day_lord_house': natal_day_lord.get('house', 0),
+        'day_lord_sign': natal_day_lord.get('rashi_name', ''),
+        'moon_transit': t_moon.get('rashi_name', ''),
+        'moon_nakshatra': t_moon.get('nakshatra_name', ''),
+        'sun_transit': t_sun.get('rashi_name', ''),
+        'natal_moon': natal_moon.get('rashi_name', ''),
+        'tithi': tithi.get('name', ''),
+        'paksha': tithi.get('paksha', ''),
+        'yoga': yoga_p.get('name', ''),
+        'karana': karana.get('name', ''),
+        'dasha': dasha.get('dasha_string', ''),
+        'maha_lord': maha.get('lord', ''),
+        'retro_planets': retros,
+        'ascendant': asc.get('rashi_name', ''),
     }
 
 
 def build_today_prompt(data: Dict, language: str = 'en') -> str:
-    """Build LLM prompt for today's reading."""
-    briefing = data['briefing']
+    return f"""{voice_card(language)}
 
-    lang_note = ''
-    if language and language.lower() not in ('english', 'en'):
-        lang_note = f'\nRespond in {language}.'
+You are telling this person about TODAY.
 
-    return f"""You are the voice of the stars — ancient, warm, mystical, true.
-You are telling this person about their day.{lang_note}
+DATE: {data['date']}
+PERSON: {data['ascendant']} ascendant, natal Moon in {data['natal_moon']}
+Active dasha: {data['dasha']} (maha lord {data['maha_lord']})
 
-{briefing}
+TODAY:
+- Day lord: {data['day_lord']} ({data['day_name']}) — in their chart at house {data['day_lord_house']} in {data['day_lord_sign']}
+- Moon transiting: {data['moon_transit']} ({data['moon_nakshatra']})
+- Sun transiting: {data['sun_transit']}
+- Tithi: {data['tithi']} {data['paksha']} | Yoga: {data['yoga']} | Karana: {data['karana']}
+- Retrograde: {', '.join(data['retro_planets']) or 'none'}
 
-Write a short, warm reading about TODAY for this person.
-
-3-5 sentences only. No headers, no bullets, no bold, no labels.
-Just flowing text — like a wise friend telling you what to expect today.
-
-Be specific: mention the day lord, the moon's transit, and how it touches their chart.
+Write a SHORT reading about today. 3-5 sentences, under 80 words.
+Flowing text — like a wise friend telling them what to expect.
+Mention the day lord and how it touches their chart, plus the Moon's transit.
 If a planet is retrograde, mention it briefly.
 End with one gentle suggestion or affirmation.
 
-Maximum 80 words. Warm, precise, personal."""
+No headers, no bullets, no labels. Just warm precise prose."""
+
+
+class _SkyRequest(BaseModel):
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = 'en'
+
+
+@router.post('/today-sky')
+async def get_today_sky(request_body: _SkyRequest, request: Request):
+    from app.core.config import settings
+    from app.core.rate_limiter import check_rate_limit
+
+    check_rate_limit(request, 'feature', getattr(settings, 'RATE_LIMIT_FEATURE', 60))
+
+    birth_data = extract_birth(request_body.kundli_data) or request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail='Birth data required')
+
+    try:
+        engine = get_engine(birth_data)
+        language = request_body.language or 'en'
+
+        data = build_today_sky(engine)
+        prompt = build_today_prompt(data, language)
+        reading = await call_llm(prompt, settings,
+                                 user_message="What does today hold?",
+                                 max_tokens=400, temperature=0.85)
+
+        return {
+            **data,
+            'reading': reading,
+            'version': 1,
+            'cache_ttl_seconds': 3600,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+today_sky_router = router

@@ -1,233 +1,197 @@
 """
-FOUR PILLARS — Kama · Karma · Dharma · Moksha
+FOUR PILLARS — Kama (desire), Karma (action), Dharma (purpose), Moksha (liberation).
 
-The four aims of the soul, read from the birth chart.
+Each pillar carries an info explainer + the personal word/note interpretation.
 
-Kama (desire):  7th house, Venus, 3rd/7th/11th houses (kama trikona)
-Karma (action):  10th house, Saturn, Mars, career indicators
-Dharma (purpose): 9th house, Jupiter, 1st/5th/9th houses (dharma trikona)
-Moksha (liberation): 12th house, Ketu, 4th/8th/12th houses (moksha trikona)
-
-Called by: POST /four-pillars { kundli_data }
+Endpoint: POST /api/public/four-pillars
 """
 
-from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from app.services.voice import voice_card
+from app.services.features._base import (
+    safe, extract_birth, get_engine, call_llm, parse_json_or_text,
+)
 
 
-PILLAR_META = {
-    'kama': {
-        'title': 'Kama',
-        'meaning': 'Desire',
-        'houses': [3, 7, 11],
-        'karaka': 'Venus',
-        'question': 'What does your soul desire?',
-    },
-    'karma': {
-        'title': 'Karma',
-        'meaning': 'Action',
-        'houses': [2, 6, 10],
-        'karaka': 'Saturn',
-        'question': 'What is your destined work?',
-    },
-    'dharma': {
-        'title': 'Dharma',
-        'meaning': 'Purpose',
-        'houses': [1, 5, 9],
-        'karaka': 'Jupiter',
-        'question': 'Why are you here?',
-    },
-    'moksha': {
-        'title': 'Moksha',
-        'meaning': 'Liberation',
-        'houses': [4, 8, 12],
-        'karaka': 'Ketu',
-        'question': 'How will you be free?',
-    },
+router = APIRouter(prefix="/public", tags=["Four Pillars"])
+
+
+PILLAR_STRUCTURE = {
+    'kama':   {'title': 'Kama',   'meaning': 'Desire',     'houses': [3, 7, 11], 'karaka': 'Venus',   'primary_house': 7},
+    'karma':  {'title': 'Karma',  'meaning': 'Action',     'houses': [2, 6, 10], 'karaka': 'Saturn',  'primary_house': 10},
+    'dharma': {'title': 'Dharma', 'meaning': 'Purpose',    'houses': [1, 5, 9],  'karaka': 'Jupiter', 'primary_house': 9},
+    'moksha': {'title': 'Moksha', 'meaning': 'Liberation', 'houses': [4, 8, 12], 'karaka': 'Ketu',    'primary_house': 12},
 }
 
 
-def _safe(fn, default=None):
-    try:
-        result = fn()
-        return result if result is not None else default
-    except Exception:
-        return default
-
-
-def _pl(planets, name):
-    p = planets.get(name, {})
-    return p if isinstance(p, dict) else {}
-
-
-def build_four_pillars(engine, language: str = 'en') -> Dict:
-    """Build the four life pillars from chart data."""
-
+def build_four_pillars(engine) -> Dict:
     planets = engine.planets if isinstance(getattr(engine, 'planets', None), dict) else {}
 
-    # Dignity data
-    dignity_data = _safe(engine.get_planetary_dignity, {})
-    if not isinstance(dignity_data, dict): dignity_data = {}
-    house_lords = dignity_data.get('house_lords', {})
+    def _pl(name):
+        p = planets.get(name, {})
+        return p if isinstance(p, dict) else {}
+
+    dignity = safe(engine.get_planetary_dignity, {}) or {}
+    if not isinstance(dignity, dict): dignity = {}
+    house_lords = dignity.get('house_lords', {}) or {}
     if not isinstance(house_lords, dict): house_lords = {}
 
-    # Yoga data
-    yoga_data = _safe(engine.get_yogas, {})
+    yoga_data = safe(engine.get_yogas, {}) or {}
     if not isinstance(yoga_data, dict): yoga_data = {}
-    all_yogas = yoga_data.get('yogas', [])
+    all_yogas = yoga_data.get('yogas', []) or []
     if not isinstance(all_yogas, list): all_yogas = []
 
-    # Shadbala
-    sb_data = _safe(engine.get_shadbala_complete, {})
+    sb_data = safe(engine.get_shadbala_complete, {}) or {}
     if not isinstance(sb_data, dict): sb_data = {}
-    sb_planets = sb_data.get('planets', {})
+    sb_planets = sb_data.get('planets', {}) or {}
     if not isinstance(sb_planets, dict): sb_planets = {}
 
-    # Ascendant
     asc = engine.ascendant if isinstance(getattr(engine, 'ascendant', None), dict) else {}
     asc_sign = asc.get('rashi_name', '')
 
     pillars = {}
-    briefing_lines = [f"FOUR PILLARS for {asc_sign} ascendant\n"]
-
-    for key, meta in PILLAR_META.items():
+    for key, meta in PILLAR_STRUCTURE.items():
         karaka_name = meta['karaka']
-        karaka = _pl(planets, karaka_name)
-        karaka_sign = karaka.get('rashi_name', '')
-        karaka_house = karaka.get('house', 0)
-        karaka_nak = karaka.get('nakshatra_name', '')
-
-        # Karaka strength
-        sb_k = sb_planets.get(karaka_name, {})
+        karaka = _pl(karaka_name)
+        sb_k = sb_planets.get(karaka_name, {}) or {}
         if not isinstance(sb_k, dict): sb_k = {}
-        karaka_strength = sb_k.get('percentage', 50)
-        karaka_grade = sb_k.get('grade', 'Average')
 
-        # Karaka dignity
-        dg_k = dignity_data.get('planets', {})
-        if not isinstance(dg_k, dict): dg_k = {}
-        dg_planet = dg_k.get(karaka_name, {})
-        if not isinstance(dg_planet, dict): dg_planet = {}
-        karaka_dignity = dg_planet.get('dignity_type', '')
+        house_planets = {
+            h: [n for n, d in planets.items() if isinstance(d, dict) and d.get('house') == h]
+            for h in meta['houses']
+        }
+        h_lords = {h: house_lords.get(str(h)) or house_lords.get(h) or '' for h in meta['houses']}
 
-        # Planets in pillar houses
-        house_planets = {}
-        for h in meta['houses']:
-            h_planets = []
-            for pname, pdata in planets.items():
-                if not isinstance(pdata, dict): continue
-                if pdata.get('house') == h:
-                    h_planets.append(pname)
-            house_planets[h] = h_planets
-
-        # House lords
-        h_lords = {}
-        for h in meta['houses']:
-            lord = house_lords.get(str(h), house_lords.get(h, ''))
-            h_lords[h] = lord
-
-        # Relevant yogas
-        pillar_yogas = []
         pillar_planet_names = set()
         for h in meta['houses']:
             pillar_planet_names.update(house_planets.get(h, []))
         pillar_planet_names.add(karaka_name)
-
+        pillar_yogas = []
         for y in all_yogas:
             if not isinstance(y, dict): continue
             yp = y.get('planets', [])
             if isinstance(yp, str): yp = [yp]
-            if not isinstance(yp, list): continue
             if any(p in pillar_planet_names for p in yp):
                 pillar_yogas.append(y.get('name', ''))
 
-        # Key house (primary)
-        primary_house = meta['houses'][-1]  # 11 for kama, 10 for karma, 9 for dharma, 12 for moksha
-        if key == 'kama': primary_house = 7
-        elif key == 'karma': primary_house = 10
-        elif key == 'dharma': primary_house = 9
-        elif key == 'moksha': primary_house = 12
-
-        primary_lord = house_lords.get(str(primary_house), house_lords.get(primary_house, ''))
-        primary_planets = house_planets.get(primary_house, [])
-
-        pillar = {
+        primary_h = meta['primary_house']
+        pillars[key] = {
             'key': key,
             'title': meta['title'],
             'meaning': meta['meaning'],
-            'question': meta['question'],
+            'houses': meta['houses'],
             'karaka': {
                 'planet': karaka_name,
-                'sign': karaka_sign,
-                'house': karaka_house,
-                'nakshatra': karaka_nak,
-                'strength': karaka_strength,
-                'grade': karaka_grade,
-                'dignity': karaka_dignity,
+                'sign': karaka.get('rashi_name', ''),
+                'house': karaka.get('house', 0),
+                'nakshatra': karaka.get('nakshatra_name', ''),
+                'strength_pct': sb_k.get('percentage', 0),
+                'grade': sb_k.get('grade', ''),
             },
-            'primary_house': primary_house,
-            'primary_lord': primary_lord,
-            'primary_planets': primary_planets,
+            'primary_house': primary_h,
+            'primary_lord': house_lords.get(str(primary_h)) or house_lords.get(primary_h) or '',
+            'primary_planets': house_planets.get(primary_h, []),
             'house_lords': h_lords,
             'house_planets': house_planets,
             'yogas': pillar_yogas[:4],
         }
-        pillars[key] = pillar
 
-        # Briefing
-        briefing_lines.append(f"═══ {meta['title'].upper()} ({meta['meaning']}) ═══")
-        briefing_lines.append(f"Karaka: {karaka_name} in {karaka_sign} H{karaka_house} ({karaka_nak}) — {karaka_strength}% {karaka_grade}")
-        briefing_lines.append(f"Primary house: H{primary_house} lord={primary_lord} planets={', '.join(primary_planets) if primary_planets else 'empty'}")
-        for h in meta['houses']:
-            hp = house_planets.get(h, [])
-            hl = h_lords.get(h, '')
-            briefing_lines.append(f"  H{h}: lord={hl} occupants={', '.join(hp) if hp else 'none'}")
-        if pillar_yogas:
-            briefing_lines.append(f"Yogas: {', '.join(pillar_yogas[:3])}")
-        briefing_lines.append('')
-
-    return {
-        'pillars': pillars,
-        'ascendant': asc_sign,
-        'briefing': '\n'.join(briefing_lines),
-    }
+    return {'pillars': pillars, 'ascendant': asc_sign}
 
 
 def build_pillars_prompt(data: Dict, language: str = 'en') -> str:
-    """Build LLM prompt for four pillars reading."""
-    briefing = data['briefing']
+    lines = [f"Ascendant: {data['ascendant']}\n"]
+    for key, p in data['pillars'].items():
+        k = p['karaka']
+        lines.append(
+            f"=== {p['title'].upper()} ({p['meaning']}) ===\n"
+            f"  Trikona houses: {p['houses']} (primary: {p['primary_house']})\n"
+            f"  Karaka: {k['planet']} in {k['sign']} house {k['house']} ({k['nakshatra']}) — strength {k['strength_pct']}% ({k['grade']})\n"
+            f"  Primary house {p['primary_house']}: lord {p['primary_lord']}, occupants {p['primary_planets'] or 'empty'}\n"
+            f"  Trikona lords: {p['house_lords']}\n"
+            f"  Yogas touching this pillar: {', '.join(p['yogas']) or 'none'}\n"
+        )
+    chart_text = '\n'.join(lines)
 
-    lang_note = ''
-    if language and language.lower() not in ('english', 'en'):
-        lang_note = f'\nRespond in {language}.'
+    return f"""{voice_card(language)}
 
-    return f"""You are the voice of the stars — ancient, warm, mystical, true.{lang_note}
+You are reading this person's four life aims (purusharthas) — Kama (desire), Karma (action), Dharma (purpose), Moksha (liberation).
 
-{briefing}
+CHART DATA:
+{chart_text}
 
-For each of the FOUR PILLARS, provide exactly this format:
+Return ONLY valid JSON in this exact shape:
+{{
+  "kama":   {{"info": "<2-3 short lines>", "word": "<one word>", "note": "<2 sentences>"}},
+  "karma":  {{"info": "<2-3 short lines>", "word": "<one word>", "note": "<2 sentences>"}},
+  "dharma": {{"info": "<2-3 short lines>", "word": "<one word>", "note": "<2 sentences>"}},
+  "moksha": {{"info": "<2-3 short lines>", "word": "<one word>", "note": "<2 sentences>"}},
+  "closing": "<one memorable sentence tying all four together>"
+}}
 
-KAMA
-word: [ONE word that captures their desire nature]
-note: [2 sentences — what they truly desire and how it manifests. Be specific to the chart data.]
+Field rules:
+- "info" = museum-label explainer. What this aim IS in Vedic philosophy + which houses and karaka govern it. Factual-mystical, NO "you" pronouns. 2-3 short lines.
+- "word" = ONE word, evocative, specific to THIS chart (not generic). Drawn from the actual placements.
+- "note" = exactly 2 sentences, second person ("you"), referencing actual signs/houses/dignity from the chart data.
+- "closing" = one sentence that ties all four pillars together for this person. Memorable. Screenshot-worthy.
 
-KARMA
-word: [ONE word that captures their action/work nature]
-note: [2 sentences — what work they are destined for. Reference the 10th house and Saturn.]
+Total under 300 words."""
 
-DHARMA
-word: [ONE word that captures their life purpose]
-note: [2 sentences — why this soul is here. Reference the 9th house and Jupiter.]
 
-MOKSHA
-word: [ONE word that captures their path to freedom]
-note: [2 sentences — how they will find liberation. Reference the 12th house and Ketu.]
+class _PillarsRequest(BaseModel):
+    kundli_data: Optional[dict] = None
+    birth_data: Optional[dict] = None
+    language: Optional[str] = 'en'
 
-CLOSING
-[One powerful closing line — a single sentence that ties all four pillars together for this specific person. Make it land. Make it memorable.]
 
-Rules:
-- The "word" must be ONE word only — evocative, specific, not generic
-- The "note" is exactly 2 sentences, warm but precise
-- Reference actual chart placements (signs, houses)
-- Total: under 250 words"""
+@router.post('/four-pillars')
+async def get_four_pillars(request_body: _PillarsRequest, request: Request):
+    from app.core.config import settings
+    from app.core.rate_limiter import check_rate_limit
+
+    check_rate_limit(request, 'feature', getattr(settings, 'RATE_LIMIT_FEATURE', 60))
+
+    birth_data = extract_birth(request_body.kundli_data) or request_body.birth_data
+    if not birth_data:
+        raise HTTPException(status_code=400, detail='Birth data required')
+
+    try:
+        engine = get_engine(birth_data)
+        language = request_body.language or 'en'
+
+        data = build_four_pillars(engine)
+        prompt = build_pillars_prompt(data, language)
+        raw = await call_llm(prompt, settings,
+                             user_message="Read these four pillars.",
+                             max_tokens=1500, temperature=0.85)
+        parsed = parse_json_or_text(raw)
+
+        result_pillars = {}
+        for key in ('kama', 'karma', 'dharma', 'moksha'):
+            llm = parsed.get(key) if isinstance(parsed.get(key), dict) else {}
+            llm = llm or {}
+            result_pillars[key] = {
+                **data['pillars'][key],
+                'info': llm.get('info', ''),
+                'word': llm.get('word', ''),
+                'note': llm.get('note', ''),
+            }
+
+        return {
+            'ascendant': data['ascendant'],
+            'pillars': result_pillars,
+            'closing': parsed.get('closing', ''),
+            'version': 2,
+            'cache_ttl_seconds': 31536000,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+four_pillars_router = router
