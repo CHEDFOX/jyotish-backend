@@ -42,6 +42,8 @@ class KundliRequest(BaseModel):
     date: dict
     time: dict
     place: dict
+    gender: Optional[str] = None
+    language: Optional[str] = "en"
 
     @field_validator("name")
     @classmethod
@@ -325,6 +327,33 @@ async def generate_kundli(request_body: KundliRequest, request: Request):
         dasha = engine.get_vimshottari_dasha()
         yogas = engine.get_yogas()
 
+        def _safe(fn, *args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                return {"error": str(e)}
+
+        gender = (request_body.gender or "male").lower()
+        gender_norm = "female" if gender in ("female", "f", "woman", "girl") else "male"
+
+        kp_data = _safe(engine.get_kp_complete)
+
+        western_big_three = _safe(engine.get_western_big_three)
+        western_aspects = _safe(engine.get_western_aspects)
+
+        chinese_chart = _safe(engine.get_chinese_chart)
+        chinese_animal = _safe(engine.get_chinese_animal)
+        chinese_day_master = _safe(engine.get_chinese_day_master)
+        chinese_elements = _safe(engine.get_chinese_elements)
+        try:
+            from app.services.chinese.bazi import BaZiChart
+            bc = BaZiChart(engine.birth_local)
+            chinese_luck = bc.get_luck_periods(gender=gender_norm)
+        except Exception as e:
+            chinese_luck = {"error": str(e)}
+
+        numerology_data = _safe(engine.get_numerology, request_body.name)
+
         return {
             "success": True,
             "kundli": {
@@ -355,7 +384,37 @@ async def generate_kundli(request_body: KundliRequest, request: Request):
                     "year": year, "month": month, "day": day,
                     "hour": hour, "minute": minute,
                     "latitude": lat, "longitude": lon,
+                    "name": request_body.name,
+                    "gender": gender_norm,
+                    "language": request_body.language or "en",
                 },
+            },
+            "systems": {
+                "vedic": {
+                    "ascendant": chart["ascendant"]["rashi_name"],
+                    "sun_sign": chart["planets"]["Sun"]["rashi_name"],
+                    "moon_sign": chart["planets"]["Moon"]["rashi_name"],
+                    "nakshatra": chart["planets"]["Moon"]["nakshatra_name"],
+                    "current_dasha": {
+                        "planet": dasha["mahadasha"]["lord"],
+                        "sub": dasha["antardasha"]["lord"],
+                        "string": dasha["dasha_string"],
+                    },
+                    "yogas_count": yogas["summary"]["total_yogas"],
+                },
+                "kp": kp_data,
+                "western": {
+                    "big_three": western_big_three,
+                    "aspects": western_aspects,
+                },
+                "chinese": {
+                    "chart": chinese_chart,
+                    "animal": chinese_animal,
+                    "day_master": chinese_day_master,
+                    "elements": chinese_elements,
+                    "luck_periods": chinese_luck,
+                },
+                "numerology": numerology_data,
             },
             "sun_sign": chart["planets"]["Sun"]["rashi_name"],
             "moon_sign": chart["planets"]["Moon"]["rashi_name"],
@@ -521,7 +580,7 @@ async def register_push_token(request: Request, body: dict):
 # ═══════════════════════════════════════════════════════════════
 import httpx, os
 
-GOOGLE_PLACES_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")
+GOOGLE_PLACES_KEY = settings.GOOGLE_PLACES_API_KEY
 
 @router.post("/places/autocomplete")
 async def places_search(body: dict):
@@ -673,3 +732,9 @@ async def delete_account():
 async def media_manifest():
     from app.services.features.media_manifest import _build_manifest; import datetime
     return {"version": int(datetime.datetime.now().timestamp()), "files": _build_manifest()}
+
+
+@router.get("/onboarding-content")
+async def onboarding_content(language: Optional[str] = None):
+    from app.services.onboarding_content import build_onboarding_payload
+    return {"success": True, "data": await build_onboarding_payload(language)}

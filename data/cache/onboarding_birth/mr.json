@@ -1,0 +1,13 @@
+{
+  "combinedTitle": "तुमचा जन्म\nकधी झाला?",
+  "placeTitle": "तुम्ही पहिला श्वास\nकुठे घेतलात?",
+  "placePlaceholder": "शहर शोधा",
+  "continue": "पुढे",
+  "labels": {
+    "day": "दिवस",
+    "month": "महिना",
+    "year": "वर्ष",
+    "hour": "तास",
+    "minute": "मिनिट"
+  }
+}
